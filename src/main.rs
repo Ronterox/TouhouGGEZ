@@ -8,23 +8,21 @@ struct State {
     sprite: graphics::Image,
 }
 
+impl State {
+    fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
+        if ctx.keyboard.is_key_pressed(key) {
+            self.x += dir.0 * self.speed;
+            self.y += dir.1 * self.speed;
+        }
+    }
+}
+
 impl ggez::event::EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
-        if ctx.keyboard.is_key_pressed(KeyCode::W) {
-            self.y -= self.speed;
-        }
-
-        if ctx.keyboard.is_key_pressed(KeyCode::S) {
-            self.y += self.speed;
-        }
-
-        if ctx.keyboard.is_key_pressed(KeyCode::A) {
-            self.x -= self.speed;
-        }
-
-        if ctx.keyboard.is_key_pressed(KeyCode::D) {
-            self.x += self.speed;
-        }
+        self.if_press_move(&ctx, KeyCode::W, (0.0, -1.0));
+        self.if_press_move(&ctx, KeyCode::S, (0.0, 1.0));
+        self.if_press_move(&ctx, KeyCode::A, (-1.0, 0.0));
+        self.if_press_move(&ctx, KeyCode::D, (1.0, 0.0));
 
         Ok(())
     }
@@ -56,7 +54,7 @@ fn main() -> GameResult {
     let state = State {
         x: 0.0,
         y: 0.0,
-        speed: 5.0,
+        speed: 10.0,
         sprite: graphics::Image::from_path(&ctx, "/sakuya.png")?,
     };
 
