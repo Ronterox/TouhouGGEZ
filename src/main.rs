@@ -15,6 +15,7 @@ struct Entity {
 struct State {
     player: Player,
     bullets: Vec<Bullet>,
+    bullet_timer: std::time::Duration,
 }
 
 impl Movable for Entity {
@@ -47,36 +48,64 @@ impl ggez::event::EventHandler<GameError> for State {
             bullet.move_by(0.0, -1.0);
         });
 
+        self.bullet_timer += ctx.time.delta();
+        if self.bullet_timer.as_secs_f32() > 0.5 {
+            self.bullets.push(Entity {
+                rigidbody: Rigidbody {
+                    position: Vector2 {
+                        x: self.player.x(),
+                        y: self.player.y(),
+                    },
+                    speed: 5.0,
+                },
+                sprite: graphics::Image::from_path(ctx, "/isaaac.jpg")
+                    .expect("Failed to load image"),
+            });
+            self.bullet_timer = std::time::Duration::new(0, 0);
+        }
+
         Ok(())
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
 
-        canvas.draw(
-            &self.player.sprite,
-            graphics::DrawParam::new()
-                .dest(Point2 {
-                    x: self.player.x(),
-                    y: self.player.y(),
-                })
-                .scale(Point2 { x: 0.2, y: 0.2 }),
-        );
-
-        self.bullets.iter().for_each(|bullet| {
+        let mut draw_on_pos = |sprite: &graphics::Image, x: f32, y: f32| {
             canvas.draw(
-                &bullet.sprite,
+                sprite,
                 graphics::DrawParam::new()
-                    .dest(Point2 {
-                        x: bullet.x(),
-                        y: bullet.y(),
-                    })
+                    .dest(Point2 { x, y })
                     .scale(Point2 { x: 0.2, y: 0.2 }),
             );
+        };
+
+        self.bullets.iter().for_each(|bullet| {
+            draw_on_pos(&bullet.sprite, bullet.x(), bullet.y());
         });
+
+        draw_on_pos(&self.player.sprite, self.player.x(), self.player.y());
 
         canvas.finish(ctx)
     }
+}
+
+fn init(ctx: &Context) -> State {
+    let load_image =
+        |path: &str| graphics::Image::from_path(ctx, path).expect("Failed to load image");
+
+    let state = State {
+        player: Entity {
+            rigidbody: Rigidbody {
+                position: Vector2 { x: 100.0, y: 100.0 },
+                speed: 5.0,
+            },
+            sprite: load_image("/sakuya.png"),
+        },
+        bullets: vec![],
+        bullet_timer: std::time::Duration::new(0, 0),
+    };
+
+    return state;
 }
 
 fn main() -> GameResult {
@@ -86,29 +115,7 @@ fn main() -> GameResult {
         .build()
         .unwrap();
 
-    let mut bullets = Vec::new();
-    let mut y = 0.0;
-    for _ in 0..10 {
-        bullets.push(Entity {
-            rigidbody: Rigidbody {
-                position: Vector2 { x: 300., y: 600. - y },
-                speed: 5.0,
-            },
-            sprite: graphics::Image::from_path(&ctx, "/isaaac.jpg")?,
-        });
-        y += 200.0;
-    }
-
-    let state = State {
-        player: Entity {
-            rigidbody: Rigidbody {
-                position: Vector2 { x: 100.0, y: 100.0 },
-                speed: 5.0,
-            },
-            sprite: graphics::Image::from_path(&ctx, "/sakuya.png")?,
-        },
-        bullets,
-    };
+    let state = init(&ctx);
 
     event::run(ctx, event_loop, state);
 }
