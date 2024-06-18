@@ -7,15 +7,28 @@ use physics::{Movable, Rigidbody};
 type Bullet = Entity;
 type Player = Entity;
 
+#[derive(PartialEq)]
+enum Visibility {
+    Visible,
+    Hidden,
+}
+
 struct Entity {
     rigidbody: Rigidbody,
     sprite: graphics::Image,
+    visibility: Visibility,
 }
 
 struct State {
     player: Player,
     bullets: Vec<Bullet>,
     bullet_timer: std::time::Duration,
+}
+
+impl Entity {
+    fn visible(&self) -> bool {
+        self.visibility == Visibility::Visible
+    }
 }
 
 impl Movable for Entity {
@@ -44,23 +57,26 @@ impl ggez::event::EventHandler<GameError> for State {
         self.if_press_move(&ctx, KeyCode::A, (-1.0, 0.0));
         self.if_press_move(&ctx, KeyCode::D, (1.0, 0.0));
 
-        self.bullets.iter_mut().for_each(|bullet| {
-            bullet.move_by(0.0, -1.0);
-        });
+        self.bullets
+            .iter_mut()
+            .filter(|x| x.visible())
+            .for_each(|bullet| {
+                bullet.move_by(0.0, -1.0);
+
+                if bullet.y() < 0.0 {
+                    bullet.visibility = Visibility::Hidden;
+                }
+            });
 
         self.bullet_timer += ctx.time.delta();
         if self.bullet_timer.as_secs_f32() > 0.5 {
-            self.bullets.push(Entity {
-                rigidbody: Rigidbody {
-                    position: Vector2 {
-                        x: self.player.x(),
-                        y: self.player.y(),
-                    },
-                    speed: 5.0,
-                },
-                sprite: graphics::Image::from_path(ctx, "/isaaac.jpg")
-                    .expect("Failed to load image"),
-            });
+            for bullet in self.bullets.iter_mut() {
+                if bullet.visibility == Visibility::Hidden {
+                    bullet.set_position(self.player.x(), self.player.y());
+                    bullet.visibility = Visibility::Visible;
+                    break;
+                }
+            }
             self.bullet_timer = std::time::Duration::new(0, 0);
         }
 
@@ -68,22 +84,22 @@ impl ggez::event::EventHandler<GameError> for State {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
+        let mut canvas = graphics::Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
 
-        let mut draw_on_pos = |sprite: &graphics::Image, x: f32, y: f32| {
+        let mut draw_on_pos = |sprite: &graphics::Image, x: f32, y: f32, size: f32| {
             canvas.draw(
                 sprite,
                 graphics::DrawParam::new()
                     .dest(Point2 { x, y })
-                    .scale(Point2 { x: 0.2, y: 0.2 }),
+                    .scale(Point2 { x: size, y: size }),
             );
         };
 
-        self.bullets.iter().for_each(|bullet| {
-            draw_on_pos(&bullet.sprite, bullet.x(), bullet.y());
+        self.bullets.iter().filter(|x| x.visible()).for_each(|bullet| {
+            draw_on_pos(&bullet.sprite, bullet.x(), bullet.y(), 0.1);
         });
 
-        draw_on_pos(&self.player.sprite, self.player.x(), self.player.y());
+        draw_on_pos(&self.player.sprite, self.player.x(), self.player.y(), 0.2);
 
         canvas.finish(ctx)
     }
@@ -93,6 +109,19 @@ fn init(ctx: &Context) -> State {
     let load_image =
         |path: &str| graphics::Image::from_path(ctx, path).expect("Failed to load image");
 
+    let mut bullets = Vec::new();
+    for _ in 0..5 {
+        let bullet = Entity {
+            rigidbody: Rigidbody {
+                position: Vector2 { x: 100.0, y: 100.0 },
+                speed: 5.0,
+            },
+            sprite: load_image("/isaac.png"),
+            visibility: Visibility::Hidden,
+        };
+        bullets.push(bullet);
+    }
+
     let state = State {
         player: Entity {
             rigidbody: Rigidbody {
@@ -100,8 +129,9 @@ fn init(ctx: &Context) -> State {
                 speed: 5.0,
             },
             sprite: load_image("/sakuya.png"),
+            visibility: Visibility::Visible,
         },
-        bullets: vec![],
+        bullets,
         bullet_timer: std::time::Duration::new(0, 0),
     };
 
