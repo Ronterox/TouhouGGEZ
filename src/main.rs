@@ -6,6 +6,7 @@ use physics::{Movable, Rigidbody};
 
 type Bullet = Entity;
 type Player = Entity;
+type Enemy = Entity;
 
 #[derive(PartialEq)]
 enum Visibility {
@@ -21,6 +22,7 @@ struct Entity {
 
 struct State {
     player: Player,
+    enemy: Enemy,
     bullets: Vec<Bullet>,
     bullet_timer: std::time::Duration,
 }
@@ -62,21 +64,20 @@ impl ggez::event::EventHandler<GameError> for State {
             .filter(|x| x.visible())
             .for_each(|bullet| {
                 bullet.move_by(0.0, -1.0);
-
                 if bullet.y() < 0.0 {
                     bullet.visibility = Visibility::Hidden;
                 }
             });
 
         self.bullet_timer += ctx.time.delta();
-        if self.bullet_timer.as_secs_f32() > 0.5 {
-            for bullet in self.bullets.iter_mut() {
-                if bullet.visibility == Visibility::Hidden {
+        if self.bullet_timer.as_secs_f32() > 0.1 {
+            self.bullets
+                .iter_mut()
+                .find(|x| !x.visible())
+                .map(|bullet| {
                     bullet.set_position(self.player.x(), self.player.y());
                     bullet.visibility = Visibility::Visible;
-                    break;
-                }
-            }
+                });
             self.bullet_timer = std::time::Duration::new(0, 0);
         }
 
@@ -86,20 +87,24 @@ impl ggez::event::EventHandler<GameError> for State {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
 
-        let mut draw_on_pos = |sprite: &graphics::Image, x: f32, y: f32, size: f32| {
-            canvas.draw(
-                sprite,
-                graphics::DrawParam::new()
-                    .dest(Point2 { x, y })
-                    .scale(Point2 { x: size, y: size }),
-            );
-        };
+        let mut draw_on_pos =
+            |entity: &Entity, size: f32, color: Color| {
+                canvas.draw(
+                    &entity.sprite,
+                    graphics::DrawParam::new()
+                        .dest(*entity.position())
+                        .scale(Point2 { x: size, y: size })
+                        .color(color),
+                );
+            };
 
-        self.bullets.iter().filter(|x| x.visible()).for_each(|bullet| {
-            draw_on_pos(&bullet.sprite, bullet.x(), bullet.y(), 0.1);
-        });
+        self.bullets
+            .iter()
+            .filter(|x| x.visible())
+            .for_each(|bullet| { draw_on_pos(&bullet, 0.1, Color::RED); });
 
-        draw_on_pos(&self.player.sprite, self.player.x(), self.player.y(), 0.2);
+        draw_on_pos(&self.player, 0.2, Color::WHITE);
+        draw_on_pos(&self.enemy, 0.15, Color::BLACK);
 
         canvas.finish(ctx)
     }
@@ -110,11 +115,11 @@ fn init(ctx: &Context) -> State {
         |path: &str| graphics::Image::from_path(ctx, path).expect("Failed to load image");
 
     let mut bullets = Vec::new();
-    for _ in 0..5 {
-        let bullet = Entity {
+    for _ in 0..8 {
+        let bullet = Bullet {
             rigidbody: Rigidbody {
                 position: Vector2 { x: 100.0, y: 100.0 },
-                speed: 5.0,
+                speed: 20.0,
             },
             sprite: load_image("/isaac.png"),
             visibility: Visibility::Hidden,
@@ -122,15 +127,25 @@ fn init(ctx: &Context) -> State {
         bullets.push(bullet);
     }
 
+    let enemy = Enemy {
+        rigidbody: Rigidbody {
+            position: Vector2 { x: 100.0, y: 0.0 },
+            speed: 10.0,
+        },
+        sprite: load_image("/sakuya.png"),
+        visibility: Visibility::Visible,
+    };
+
     let state = State {
-        player: Entity {
+        player: Player {
             rigidbody: Rigidbody {
                 position: Vector2 { x: 100.0, y: 100.0 },
-                speed: 5.0,
+                speed: 10.0,
             },
             sprite: load_image("/sakuya.png"),
             visibility: Visibility::Visible,
         },
+        enemy,
         bullets,
         bullet_timer: std::time::Duration::new(0, 0),
     };
@@ -146,6 +161,5 @@ fn main() -> GameResult {
         .unwrap();
 
     let state = init(&ctx);
-
     event::run(ctx, event_loop, state);
 }
