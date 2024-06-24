@@ -118,7 +118,7 @@ fn init(ctx: &Context) -> State {
     for _ in 0..8 {
         let bullet = Bullet {
             rigidbody: Rigidbody {
-                position: Vector2 { x: 100.0, y: 100.0 },
+                position: Vector2 { x: 0., y: 0. },
                 speed: 20.0,
             },
             sprite: load_image("/isaac.png"),
@@ -129,7 +129,7 @@ fn init(ctx: &Context) -> State {
 
     let enemy = Enemy {
         rigidbody: Rigidbody {
-            position: Vector2 { x: 100.0, y: 0.0 },
+            position: Vector2 { x: 350.0, y: 100.0 },
             speed: 10.0,
         },
         sprite: load_image("/sakuya.png"),
@@ -139,7 +139,7 @@ fn init(ctx: &Context) -> State {
     let state = State {
         player: Player {
             rigidbody: Rigidbody {
-                position: Vector2 { x: 100.0, y: 100.0 },
+                position: Vector2 { x: 350.0, y: 350.0 },
                 speed: 10.0,
             },
             sprite: load_image("/sakuya.png"),
