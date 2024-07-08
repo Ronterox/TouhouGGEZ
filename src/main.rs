@@ -6,7 +6,6 @@ use physics::{Movable, Rigidbody};
 
 type Bullet = Entity;
 type Player = Entity;
-type Enemy = Entity;
 
 #[derive(PartialEq)]
 enum Visibility {
@@ -20,11 +19,17 @@ struct Entity {
     visibility: Visibility,
 }
 
+struct Enemy {
+    entity: Entity,
+    velocities: Vec<f32>,
+    move_timer: std::time::Duration,
+}
+
 struct State {
     player: Player,
     enemy: Enemy,
     bullets: Vec<Bullet>,
-    bullet_timer: std::time::Duration,
+    shot_timer: std::time::Duration,
 }
 
 impl Entity {
@@ -69,8 +74,8 @@ impl ggez::event::EventHandler<GameError> for State {
                 }
             });
 
-        self.bullet_timer += ctx.time.delta();
-        if self.bullet_timer.as_secs_f32() > 0.1 {
+        self.shot_timer += ctx.time.delta();
+        if self.shot_timer.as_secs_f32() > 0.1 {
             self.bullets
                 .iter_mut()
                 .find(|x| !x.visible())
@@ -78,8 +83,16 @@ impl ggez::event::EventHandler<GameError> for State {
                     bullet.set_position(self.player.x(), self.player.y());
                     bullet.visibility = Visibility::Visible;
                 });
-            self.bullet_timer = std::time::Duration::new(0, 0);
+            self.shot_timer = std::time::Duration::new(0, 0);
         }
+
+        self.enemy.move_timer += ctx.time.delta();
+        if self.enemy.move_timer.as_secs_f32() > 1.5 {
+            self.enemy.velocities.rotate_left(1);
+            self.enemy.move_timer = std::time::Duration::new(0, 0);
+        }
+        let vel = self.enemy.velocities.first().unwrap_or(&0.0);
+        self.enemy.entity.move_by(vel * self.enemy.entity.speed(), 0.0);
 
         Ok(())
     }
@@ -87,24 +100,25 @@ impl ggez::event::EventHandler<GameError> for State {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
 
-        let mut draw_on_pos =
-            |entity: &Entity, size: f32, color: Color| {
-                canvas.draw(
-                    &entity.sprite,
-                    graphics::DrawParam::new()
-                        .dest(*entity.position())
-                        .scale(Point2 { x: size, y: size })
-                        .color(color),
-                );
-            };
+        let mut draw_on_pos = |entity: &Entity, size: f32, color: Color| {
+            canvas.draw(
+                &entity.sprite,
+                graphics::DrawParam::new()
+                    .dest(*entity.position())
+                    .scale(Point2 { x: size, y: size })
+                    .color(color),
+            );
+        };
 
         self.bullets
             .iter()
             .filter(|x| x.visible())
-            .for_each(|bullet| { draw_on_pos(&bullet, 0.1, Color::RED); });
+            .for_each(|bullet| {
+                draw_on_pos(&bullet, 0.05, Color::RED);
+            });
 
         draw_on_pos(&self.player, 0.2, Color::WHITE);
-        draw_on_pos(&self.enemy, 0.15, Color::BLACK);
+        draw_on_pos(&self.enemy.entity, 0.15, Color::BLACK);
 
         canvas.finish(ctx)
     }
@@ -128,12 +142,16 @@ fn init(ctx: &Context) -> State {
     }
 
     let enemy = Enemy {
-        rigidbody: Rigidbody {
-            position: Vector2 { x: 350.0, y: 100.0 },
-            speed: 10.0,
+        entity: Entity {
+            rigidbody: Rigidbody {
+                position: Vector2 { x: 350.0, y: 100.0 },
+                speed: 2.0,
+            },
+            sprite: load_image("/sakuya.png"),
+            visibility: Visibility::Visible,
         },
-        sprite: load_image("/sakuya.png"),
-        visibility: Visibility::Visible,
+        velocities: vec![-1., 0., 1., 0., 1., 0., -1., 0.],
+        move_timer: std::time::Duration::new(0, 0),
     };
 
     let state = State {
@@ -147,7 +165,7 @@ fn init(ctx: &Context) -> State {
         },
         enemy,
         bullets,
-        bullet_timer: std::time::Duration::new(0, 0),
+        shot_timer: std::time::Duration::new(0, 0),
     };
 
     return state;
