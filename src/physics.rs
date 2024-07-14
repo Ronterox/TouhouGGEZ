@@ -21,7 +21,9 @@ pub trait Movable {
     }
 }
 
+
 pub struct Rigidbody {
     pub position: Vector2<f32>,
     pub speed: f32,
 }
+
