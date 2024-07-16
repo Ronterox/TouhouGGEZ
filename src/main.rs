@@ -1,7 +1,7 @@
 mod physics;
 
 use ggez::{graphics::Color, input::keyboard::KeyCode, *};
-use mint::{Point2, Vector2};
+use mint::Point2;
 use physics::{Movable, Rigidbody};
 
 type Bullet = Body;
@@ -28,6 +28,7 @@ struct Enemy {
     spell: Spell,
     velocities: Vec<f32>,
     move_timer: Timer,
+    health: u32,
 }
 
 struct Player {
@@ -43,6 +44,16 @@ struct State {
 struct Timer {
     time: std::time::Duration,
     delay: f32,
+}
+
+trait Distance {
+    fn distance(&self, other: &Self) -> f32;
+}
+
+impl Distance for Point2<f32> {
+    fn distance(&self, other: &Self) -> f32 {
+        ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
+    }
 }
 
 impl Spell {
@@ -132,48 +143,64 @@ impl ggez::event::EventHandler<GameError> for State {
         self.if_press_move(&ctx, KeyCode::A, (-1.0, 0.0));
         self.if_press_move(&ctx, KeyCode::D, (1.0, 0.0));
 
-        let p = &mut self.player;
+        let player = &mut self.player;
+        let player_pos = player.position().clone();
 
-        p.spell.mut_for_each_visible(|bullet| {
+        let enemy = &mut self.enemy;
+        let enemy_pos = enemy.position().clone();
+
+        player.spell.mut_for_each_visible(|bullet| {
             bullet.move_by(0.0, -1.0);
-            if bullet.y() < 0.0 {
+            let hit_enemy = bullet.position().distance(&enemy_pos) < 100.;
+
+            if bullet.y() < 0.0 || hit_enemy {
                 bullet.visibility = Visibility::Hidden;
+            }
+
+            if hit_enemy {
+                enemy.health -= 1;
+                if enemy.health == 0 {
+                    todo!("You won, enemy defeated!");
+                }
+                if enemy.health % 5 == 0 {
+                    println!("Enemy health: {}", enemy.health);
+                }
             }
         });
 
-        if p.spell.ready(&ctx) {
-            let (x, y) = (p.x(), p.y());
-
-            p.spell.find_hidden_then_do(|bullet| {
-                bullet.set_position(x, y);
-                bullet.visibility = Visibility::Visible;
-            });
-        }
-
-        let e = &mut self.enemy;
-
-        e.spell.mut_for_each_visible(|bullet| {
+        enemy.spell.mut_for_each_visible(|bullet| {
             bullet.move_by(0.0, 1.0);
             if bullet.y() > 800.0 {
                 bullet.visibility = Visibility::Hidden;
+            } else if bullet.position().distance(&player_pos) < 25. {
+                todo!("You lost, player defeated!");
             }
         });
 
-        if e.spell.ready(&ctx) {
-            let (x, y) = (e.x(), e.y());
+        if player.spell.ready(&ctx) {
+            let (x, y) = (player.x(), player.y());
 
-            e.spell.find_hidden_then_do(|bullet| {
+            player.spell.find_hidden_then_do(|bullet| {
                 bullet.set_position(x, y);
                 bullet.visibility = Visibility::Visible;
             });
         }
 
-        if e.move_timer.ready(&ctx) {
-            e.velocities.rotate_left(1);
+        if enemy.spell.ready(&ctx) {
+            let (x, y) = (enemy.x(), enemy.y());
+
+            enemy.spell.find_hidden_then_do(|bullet| {
+                bullet.set_position(x, y);
+                bullet.visibility = Visibility::Visible;
+            });
         }
 
-        let vel = e.velocities.first().unwrap_or(&0.0);
-        e.move_by(vel * e.speed(), 0.0);
+        if enemy.move_timer.ready(&ctx) {
+            enemy.velocities.rotate_left(1);
+        }
+
+        let vel = enemy.velocities.first().unwrap_or(&0.0);
+        enemy.move_by(vel * enemy.speed(), 0.0);
 
         Ok(())
     }
@@ -186,8 +213,9 @@ impl ggez::event::EventHandler<GameError> for State {
                 &body.sprite,
                 graphics::DrawParam::new()
                     .dest(*body.position())
-                    .scale(Point2 { x: size, y: size })
-                    .color(color),
+                    .scale([size, size])
+                    .color(color)
+                    .offset([0.5, 0.5]),
             );
         };
 
@@ -202,6 +230,17 @@ impl ggez::event::EventHandler<GameError> for State {
         draw_on_pos(&self.player.body, 0.12, Color::WHITE);
         draw_on_pos(&self.enemy.body, 0.2, Color::BLACK);
 
+        let circle = graphics::Mesh::new_circle(
+            ctx,
+            graphics::DrawMode::fill(),
+            *self.player.body.position(),
+            10.,
+            0.1,
+            Color::from_rgba(255, 0, 0, 127),
+        )?;
+
+        canvas.draw(&circle, graphics::DrawParam::default());
+
         canvas.finish(ctx)
     }
 }
@@ -214,7 +253,7 @@ fn init(ctx: &Context) -> State {
     for _ in 0..8 {
         let bullet = Bullet {
             rigidbody: Rigidbody {
-                position: Vector2 { x: 0., y: 0. },
+                position: Point2 { x: 0., y: 0. },
                 speed: 20.0,
             },
             sprite: load_image("/isaac.png"),
@@ -227,7 +266,7 @@ fn init(ctx: &Context) -> State {
     for _ in 0..8 {
         let bullet = Bullet {
             rigidbody: Rigidbody {
-                position: Vector2 { x: 0., y: 0. },
+                position: Point2 { x: 0., y: 0. },
                 speed: 5.0,
             },
             sprite: load_image("/isaac.png"),
@@ -240,7 +279,7 @@ fn init(ctx: &Context) -> State {
         player: Player {
             body: Body {
                 rigidbody: Rigidbody {
-                    position: Vector2 { x: 350.0, y: 350.0 },
+                    position: Point2 { x: 350.0, y: 350.0 },
                     speed: 10.0,
                 },
                 sprite: load_image("/sakuya.png"),
@@ -252,9 +291,10 @@ fn init(ctx: &Context) -> State {
             },
         },
         enemy: Enemy {
+            health: 200,
             body: Body {
                 rigidbody: Rigidbody {
-                    position: Vector2 { x: 350.0, y: 100.0 },
+                    position: Point2 { x: 350.0, y: 100.0 },
                     speed: 2.0,
                 },
                 sprite: load_image("/sakuya.png"),

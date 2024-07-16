@@ -1,4 +1,4 @@
-use ggez::mint::Vector2;
+use ggez::mint::Point2;
 
 pub trait Movable {
     fn get_rigidbody(&self) -> &Rigidbody;
@@ -6,7 +6,7 @@ pub trait Movable {
     fn speed(&self) -> f32 {
         self.get_rigidbody().speed
     }
-    fn position(&self) -> &Vector2<f32> {
+    fn position(&self) -> &Point2<f32> {
         &self.get_rigidbody().position
     }
     fn x(&self) -> f32 {
@@ -23,7 +23,7 @@ pub trait Movable {
 
 
 pub struct Rigidbody {
-    pub position: Vector2<f32>,
+    pub position: Point2<f32>,
     pub speed: f32,
 }
 
