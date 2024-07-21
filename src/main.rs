@@ -3,10 +3,11 @@ mod physics;
 use ggez::{graphics::Color, input::keyboard::KeyCode, *};
 use mint::Point2;
 use physics::{Movable, Rigidbody};
+use touhoulang::parse_text;
 
 type Bullet = Body;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 enum Visibility {
     Visible,
     Hidden,
@@ -17,6 +18,7 @@ struct Spell {
     shot_timer: Timer,
 }
 
+#[derive(Clone)]
 struct Body {
     rigidbody: Rigidbody,
     sprite: graphics::Image,
@@ -37,8 +39,8 @@ struct Player {
 }
 
 struct State {
-    player: Player,
-    enemy: Enemy,
+    player: Option<Player>,
+    enemy: Option<Enemy>,
 }
 
 struct Timer {
@@ -50,13 +52,14 @@ trait Distance {
     fn distance(&self, other: &Self) -> f32;
 }
 
-impl Distance for Point2<f32> {
-    fn distance(&self, other: &Self) -> f32 {
-        ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
-    }
-}
-
 impl Spell {
+    fn new(bullet: Bullet, bullets_size: usize, delay: f32) -> Self {
+        Self {
+            bullets: std::iter::repeat(bullet).take(bullets_size).collect(),
+            shot_timer: Timer::new(delay),
+        }
+    }
+
     fn ready(&mut self, ctx: &Context) -> bool {
         self.shot_timer.ready(ctx)
     }
@@ -64,6 +67,7 @@ impl Spell {
     fn for_each_visible(&self, f: impl FnMut(&Bullet)) {
         self.bullets.iter().filter(|x| x.visible()).for_each(f);
     }
+
     fn mut_for_each_visible(&mut self, f: impl FnMut(&mut Bullet)) {
         self.bullets.iter_mut().filter(|x| x.visible()).for_each(f);
     }
@@ -75,7 +79,7 @@ impl Spell {
 
 impl Timer {
     fn new(delay: f32) -> Self {
-        Timer {
+        Self {
             time: std::time::Duration::new(0, 0),
             delay,
         }
@@ -92,8 +96,68 @@ impl Timer {
 }
 
 impl Body {
+    fn new(speed: f32, position: [f32; 2], ctx: &Context, image_path: &str) -> Self {
+        Self {
+            rigidbody: Rigidbody {
+                position: Point2::from(position),
+                speed,
+            },
+            sprite: load_image(ctx, image_path),
+            visibility: Visibility::Hidden,
+        }
+    }
+
     fn visible(&self) -> bool {
         self.visibility == Visibility::Visible
+    }
+}
+
+impl Player {
+    fn new(ctx: &Context, bullet: Bullet, bullets_size: usize) -> Self {
+        Self {
+            body: Body::new(10.0, [350.0, 350.0], ctx, "/sakuya.png"),
+            spell: Spell::new(bullet, bullets_size, 0.1),
+        }
+    }
+}
+
+impl Enemy {
+    fn new(ctx: &Context, bullet: Bullet, bullets_size: usize) -> Self {
+        Self {
+            health: 200,
+            body: Body::new(2., [350.0, 100.0], ctx, "/sakuya.png"),
+            spell: Spell::new(bullet, bullets_size, 0.5),
+            velocities: vec![-1., 0., 1., 0., 1., 0., -1., 0.],
+            move_timer: Timer::new(1.5),
+        }
+    }
+}
+
+impl State {
+    fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
+        if let Some(player) = &mut self.player {
+            if ctx.keyboard.is_key_pressed(key) {
+                player.move_by(dir.0, dir.1);
+            }
+        }
+    }
+
+    fn new(ctx: &Context) -> Self {
+        let (vars, _) = parse_text(&std::fs::read_to_string("script.touhou").unwrap());
+        dbg!(vars);
+
+        let bullet = |speed: f32| Bullet::new(speed, [0., 0.], ctx, "/isaac.png");
+
+        Self {
+            player: Some(Player::new(ctx, bullet(20.0), 8)),
+            enemy: Some(Enemy::new(ctx, bullet(5.0), 5)),
+        }
+    }
+}
+
+impl Distance for Point2<f32> {
+    fn distance(&self, other: &Self) -> f32 {
+        ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
     }
 }
 
@@ -128,14 +192,6 @@ impl Movable for Enemy {
     }
 }
 
-impl State {
-    fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
-        if ctx.keyboard.is_key_pressed(key) {
-            self.player.move_by(dir.0, dir.1);
-        }
-    }
-}
-
 impl ggez::event::EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         self.if_press_move(&ctx, KeyCode::W, (0.0, -1.0));
@@ -143,64 +199,64 @@ impl ggez::event::EventHandler<GameError> for State {
         self.if_press_move(&ctx, KeyCode::A, (-1.0, 0.0));
         self.if_press_move(&ctx, KeyCode::D, (1.0, 0.0));
 
-        let player = &mut self.player;
-        let player_pos = player.position().clone();
+        if let (Some(player), Some(enemy)) = (&mut self.player, &mut self.enemy) {
+            let player_pos = player.position();
+            let enemy_pos = enemy.position().to_owned();
 
-        let enemy = &mut self.enemy;
-        let enemy_pos = enemy.position().clone();
-
-        player.spell.mut_for_each_visible(|bullet| {
-            bullet.move_by(0.0, -1.0);
-            let hit_enemy = bullet.position().distance(&enemy_pos) < 100.;
-
-            if bullet.y() < 0.0 || hit_enemy {
-                bullet.visibility = Visibility::Hidden;
-            }
-
-            if hit_enemy {
-                enemy.health -= 1;
-                if enemy.health == 0 {
-                    todo!("You won, enemy defeated!");
+            enemy.spell.mut_for_each_visible(|bullet| {
+                bullet.move_by(0.0, 1.0);
+                if bullet.y() > 800.0 {
+                    bullet.visibility = Visibility::Hidden;
+                } else if bullet.position().distance(&player_pos) < 25. {
+                    todo!("You lost, player defeated!");
                 }
-                if enemy.health % 5 == 0 {
-                    println!("Enemy health: {}", enemy.health);
+            });
+
+            player.spell.mut_for_each_visible(|bullet| {
+                bullet.move_by(0.0, -1.0);
+                let hit_enemy = bullet.position().distance(&enemy_pos) < 100.;
+
+                if bullet.y() < 0.0 || hit_enemy {
+                    bullet.visibility = Visibility::Hidden;
                 }
-            }
-        });
 
-        enemy.spell.mut_for_each_visible(|bullet| {
-            bullet.move_by(0.0, 1.0);
-            if bullet.y() > 800.0 {
-                bullet.visibility = Visibility::Hidden;
-            } else if bullet.position().distance(&player_pos) < 25. {
-                todo!("You lost, player defeated!");
-            }
-        });
+                if hit_enemy {
+                    enemy.health -= 1;
+                    if enemy.health == 0 {
+                        todo!("You won, enemy defeated!");
+                    }
 
-        if player.spell.ready(&ctx) {
-            let (x, y) = (player.x(), player.y());
-
-            player.spell.find_hidden_then_do(|bullet| {
-                bullet.set_position(x, y);
-                bullet.visibility = Visibility::Visible;
+                    if enemy.health % 5 == 0 {
+                        println!("Enemy health: {}", enemy.health);
+                    }
+                }
             });
+
+            if player.spell.ready(&ctx) {
+                let (x, y) = (player.x(), player.y());
+
+                player.spell.find_hidden_then_do(|bullet| {
+                    bullet.set_position(x, y);
+                    bullet.visibility = Visibility::Visible;
+                });
+            }
+
+            if enemy.spell.ready(&ctx) {
+                let (x, y) = (enemy.x(), enemy.y());
+
+                enemy.spell.find_hidden_then_do(|bullet| {
+                    bullet.set_position(x, y);
+                    bullet.visibility = Visibility::Visible;
+                });
+            }
+
+            if enemy.move_timer.ready(&ctx) {
+                enemy.velocities.rotate_left(1);
+            }
+
+            let vel = enemy.velocities.first().unwrap_or(&0.0);
+            enemy.move_by(vel * enemy.speed(), 0.0);
         }
-
-        if enemy.spell.ready(&ctx) {
-            let (x, y) = (enemy.x(), enemy.y());
-
-            enemy.spell.find_hidden_then_do(|bullet| {
-                bullet.set_position(x, y);
-                bullet.visibility = Visibility::Visible;
-            });
-        }
-
-        if enemy.move_timer.ready(&ctx) {
-            enemy.velocities.rotate_left(1);
-        }
-
-        let vel = enemy.velocities.first().unwrap_or(&0.0);
-        enemy.move_by(vel * enemy.speed(), 0.0);
 
         Ok(())
     }
@@ -219,106 +275,47 @@ impl ggez::event::EventHandler<GameError> for State {
             );
         };
 
-        self.player.spell.for_each_visible(|bullet| {
-            draw_on_pos(&bullet, 0.05, Color::RED);
-        });
+        if let Some(player) = &self.player {
+            player.spell.for_each_visible(|bullet| {
+                draw_on_pos(&bullet, 0.05, Color::RED);
+            });
 
-        self.enemy.spell.for_each_visible(|bullet| {
-            draw_on_pos(&bullet, 0.1, Color::RED);
-        });
+            draw_on_pos(&player.body, 0.12, Color::WHITE);
 
-        draw_on_pos(&self.player.body, 0.12, Color::WHITE);
-        draw_on_pos(&self.enemy.body, 0.2, Color::BLACK);
+            // let circle = graphics::Mesh::new_circle(
+            //     ctx,
+            //     graphics::DrawMode::fill(),
+            //     *player.body.position(),
+            //     10.,
+            //     0.1,
+            //     Color::from_rgba(255, 0, 0, 127),
+            // )?;
+            //
+            // canvas.draw(&circle, graphics::DrawParam::default());
+        }
 
-        let circle = graphics::Mesh::new_circle(
-            ctx,
-            graphics::DrawMode::fill(),
-            *self.player.body.position(),
-            10.,
-            0.1,
-            Color::from_rgba(255, 0, 0, 127),
-        )?;
+        if let Some(enemy) = &self.enemy {
+            enemy.spell.for_each_visible(|bullet| {
+                draw_on_pos(&bullet, 0.1, Color::RED);
+            });
 
-        canvas.draw(&circle, graphics::DrawParam::default());
+            draw_on_pos(&enemy.body, 0.2, Color::BLACK);
+        }
 
         canvas.finish(ctx)
     }
 }
 
-fn init(ctx: &Context) -> State {
-    let load_image =
-        |path: &str| graphics::Image::from_path(ctx, path).expect("Failed to load image");
-
-    let mut bullets = Vec::new();
-    for _ in 0..8 {
-        let bullet = Bullet {
-            rigidbody: Rigidbody {
-                position: Point2 { x: 0., y: 0. },
-                speed: 20.0,
-            },
-            sprite: load_image("/isaac.png"),
-            visibility: Visibility::Hidden,
-        };
-        bullets.push(bullet);
-    }
-
-    let mut enemy_bullets = Vec::new();
-    for _ in 0..8 {
-        let bullet = Bullet {
-            rigidbody: Rigidbody {
-                position: Point2 { x: 0., y: 0. },
-                speed: 5.0,
-            },
-            sprite: load_image("/isaac.png"),
-            visibility: Visibility::Hidden,
-        };
-        enemy_bullets.push(bullet);
-    }
-
-    let state = State {
-        player: Player {
-            body: Body {
-                rigidbody: Rigidbody {
-                    position: Point2 { x: 350.0, y: 350.0 },
-                    speed: 10.0,
-                },
-                sprite: load_image("/sakuya.png"),
-                visibility: Visibility::Visible,
-            },
-            spell: Spell {
-                bullets,
-                shot_timer: Timer::new(0.1),
-            },
-        },
-        enemy: Enemy {
-            health: 200,
-            body: Body {
-                rigidbody: Rigidbody {
-                    position: Point2 { x: 350.0, y: 100.0 },
-                    speed: 2.0,
-                },
-                sprite: load_image("/sakuya.png"),
-                visibility: Visibility::Visible,
-            },
-            spell: Spell {
-                bullets: enemy_bullets,
-                shot_timer: Timer::new(0.5),
-            },
-            velocities: vec![-1., 0., 1., 0., 1., 0., -1., 0.],
-            move_timer: Timer::new(1.5),
-        },
-    };
-
-    return state;
+fn load_image(ctx: &Context, path: &str) -> graphics::Image {
+    graphics::Image::from_path(ctx, path).expect("Failed to load image")
 }
 
 fn main() -> GameResult {
     let (ctx, event_loop) = ContextBuilder::new("Touhou Engine", "Rontero")
         .add_resource_path(std::path::PathBuf::from("./assets"))
         .default_conf(conf::Conf::new())
-        .build()
-        .unwrap();
+        .build()?;
 
-    let state = init(&ctx);
+    let state = State::new(&ctx);
     event::run(ctx, event_loop, state);
 }

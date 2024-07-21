@@ -22,6 +22,7 @@ pub trait Movable {
 }
 
 
+#[derive(Clone)]
 pub struct Rigidbody {
     pub position: Point2<f32>,
     pub speed: f32,

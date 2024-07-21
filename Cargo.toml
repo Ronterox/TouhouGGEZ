@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ggez = "0.9.3"
+touhoulang = { path = "../TouhouLang" }
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]
