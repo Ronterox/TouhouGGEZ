@@ -144,13 +144,41 @@ impl State {
 
     fn new(ctx: &Context) -> Self {
         let (vars, _) = parse_text(&std::fs::read_to_string("script.touhou").unwrap());
-        dbg!(vars);
+        dbg!(&vars);
 
         let bullet = |speed: f32| Bullet::new(speed, [0., 0.], ctx, "/isaac.png");
 
+        let player = vars.get("player").map(|player| {
+            Player::new(
+                ctx,
+                bullet(
+                    vars.get(format!("{player}.bullet.speed").as_str())
+                        .map(|x| x.parse().unwrap())
+                        .unwrap_or(20.),
+                ),
+                vars.get(format!("{player}.bullets").as_str())
+                    .map(|x| x.parse().unwrap())
+                    .unwrap_or(8),
+            )
+        });
+
+        let enemy = vars.get("enemy").map(|enemy| {
+            Enemy::new(
+                ctx,
+                bullet(
+                    vars.get(format!("{enemy}.bullet.speed").as_str())
+                        .map(|x| x.parse().unwrap())
+                        .unwrap_or(5.),
+                ),
+                vars.get(format!("{enemy}.bullets").as_str())
+                    .map(|x| x.parse().unwrap())
+                    .unwrap_or(5),
+            )
+        });
+
         Self {
-            player: Some(Player::new(ctx, bullet(20.0), 8)),
-            enemy: Some(Enemy::new(ctx, bullet(5.0), 5)),
+            player,
+            enemy,
         }
     }
 }
@@ -198,6 +226,10 @@ impl ggez::event::EventHandler<GameError> for State {
         self.if_press_move(&ctx, KeyCode::S, (0.0, 1.0));
         self.if_press_move(&ctx, KeyCode::A, (-1.0, 0.0));
         self.if_press_move(&ctx, KeyCode::D, (1.0, 0.0));
+
+        if ctx.keyboard.is_key_pressed(KeyCode::R) {
+            *self = State::new(&ctx);
+        }
 
         if let (Some(player), Some(enemy)) = (&mut self.player, &mut self.enemy) {
             let player_pos = player.position();
