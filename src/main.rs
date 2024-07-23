@@ -1,6 +1,8 @@
 mod physics;
 
-use ggez::{graphics::Color, input::keyboard::KeyCode, *};
+use std::{collections::HashMap, str::FromStr};
+
+use ggez::{graphics::Color, graphics::Image, input::keyboard::KeyCode, *};
 use mint::Point2;
 use physics::{Movable, Rigidbody};
 use touhoulang::parse_text;
@@ -21,7 +23,7 @@ struct Spell {
 #[derive(Clone)]
 struct Body {
     rigidbody: Rigidbody,
-    sprite: graphics::Image,
+    sprite: Image,
     visibility: Visibility,
 }
 
@@ -38,14 +40,15 @@ struct Player {
     spell: Spell,
 }
 
-struct State {
-    player: Option<Player>,
-    enemy: Option<Enemy>,
-}
-
 struct Timer {
     time: std::time::Duration,
     delay: f32,
+}
+
+struct State {
+    player: Option<Player>,
+    enemy: Option<Enemy>,
+    background: Option<Image>,
 }
 
 trait Distance {
@@ -134,14 +137,6 @@ impl Enemy {
 }
 
 impl State {
-    fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
-        if let Some(player) = &mut self.player {
-            if ctx.keyboard.is_key_pressed(key) {
-                player.move_by(dir.0, dir.1);
-            }
-        }
-    }
-
     fn new(ctx: &Context) -> Self {
         let (vars, _) = parse_text(&std::fs::read_to_string("script.touhou").unwrap());
         dbg!(&vars);
@@ -151,35 +146,51 @@ impl State {
         let player = vars.get("player").map(|player| {
             Player::new(
                 ctx,
-                bullet(
-                    vars.get(format!("{player}.bullet.speed").as_str())
-                        .map(|x| x.parse().unwrap())
-                        .unwrap_or(20.),
-                ),
-                vars.get(format!("{player}.bullets").as_str())
-                    .map(|x| x.parse().unwrap())
-                    .unwrap_or(8),
+                bullet(vars_parse(&vars, player, "bullets.speed", 20.)),
+                vars_parse(&vars, player, "bullets", 8),
             )
         });
 
         let enemy = vars.get("enemy").map(|enemy| {
             Enemy::new(
                 ctx,
-                bullet(
-                    vars.get(format!("{enemy}.bullet.speed").as_str())
-                        .map(|x| x.parse().unwrap())
-                        .unwrap_or(5.),
-                ),
-                vars.get(format!("{enemy}.bullets").as_str())
-                    .map(|x| x.parse().unwrap())
-                    .unwrap_or(5),
+                bullet(vars_parse(&vars, enemy, "bullets.speed", 5.)),
+                vars_parse(&vars, enemy, "bullets", 5),
             )
         });
+
+        let background = vars
+            .get("background")
+            .map(|background| load_image(ctx, &background.replace('"', "/")));
+
+        if let Some(b) = &background {
+            dbg!(b.width(), b.height());
+        }
 
         Self {
             player,
             enemy,
+            background,
         }
+    }
+
+    fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
+        if let Some(player) = &mut self.player {
+            if ctx.keyboard.is_key_pressed(key) {
+                player.move_by(dir.0, dir.1);
+            }
+        }
+    }
+
+    fn draw_body(&self, canvas: &mut graphics::Canvas, body: &Body, size: f32, color: Color) {
+        canvas.draw(
+            &body.sprite,
+            graphics::DrawParam::new()
+                .dest(*body.position())
+                .scale([size, size])
+                .color(color)
+                .offset([0.5, 0.5]),
+        );
     }
 }
 
@@ -296,50 +307,53 @@ impl ggez::event::EventHandler<GameError> for State {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
 
-        let mut draw_on_pos = |body: &Body, size: f32, color: Color| {
-            canvas.draw(
-                &body.sprite,
-                graphics::DrawParam::new()
-                    .dest(*body.position())
-                    .scale([size, size])
-                    .color(color)
-                    .offset([0.5, 0.5]),
-            );
-        };
+        if let Some(background) = &self.background {
+            canvas.draw(background, graphics::DrawParam::default());
+        }
 
         if let Some(player) = &self.player {
             player.spell.for_each_visible(|bullet| {
-                draw_on_pos(&bullet, 0.05, Color::RED);
+                self.draw_body(&mut canvas, &bullet, 0.05, Color::RED);
             });
+            self.draw_body(&mut canvas, &player.body, 0.12, Color::WHITE);
 
-            draw_on_pos(&player.body, 0.12, Color::WHITE);
+            let circle = graphics::Mesh::new_circle(
+                ctx,
+                graphics::DrawMode::fill(),
+                *player.body.position(),
+                10.,
+                0.1,
+                Color::from_rgba(255, 0, 0, 127),
+            )?;
 
-            // let circle = graphics::Mesh::new_circle(
-            //     ctx,
-            //     graphics::DrawMode::fill(),
-            //     *player.body.position(),
-            //     10.,
-            //     0.1,
-            //     Color::from_rgba(255, 0, 0, 127),
-            // )?;
-            //
-            // canvas.draw(&circle, graphics::DrawParam::default());
+            canvas.draw(&circle, graphics::DrawParam::default());
         }
 
         if let Some(enemy) = &self.enemy {
             enemy.spell.for_each_visible(|bullet| {
-                draw_on_pos(&bullet, 0.1, Color::RED);
+                self.draw_body(&mut canvas, &bullet, 0.1, Color::RED);
             });
 
-            draw_on_pos(&enemy.body, 0.2, Color::BLACK);
+            self.draw_body(&mut canvas, &enemy.body, 0.2, Color::BLACK);
         }
 
         canvas.finish(ctx)
     }
 }
 
-fn load_image(ctx: &Context, path: &str) -> graphics::Image {
-    graphics::Image::from_path(ctx, path).expect("Failed to load image")
+fn vars_parse<T: FromStr + Default>(
+    vars: &HashMap<String, String>,
+    key: &str,
+    params: &str,
+    unless: T,
+) -> T {
+    vars.get(format!("{key}.{params}").as_str())
+        .map(|x| x.parse().unwrap_or_default())
+        .unwrap_or(unless)
+}
+
+fn load_image(ctx: &Context, path: &str) -> Image {
+    Image::from_path(ctx, path).expect("Failed to load image")
 }
 
 fn main() -> GameResult {
