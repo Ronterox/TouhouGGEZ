@@ -146,7 +146,7 @@ impl State {
         let player = vars.get("player").map(|player| {
             Player::new(
                 ctx,
-                bullet(vars_parse(&vars, player, "bullets.speed", 20.)),
+                bullet(vars_parse(&vars, player, "bullet.speed", 20.)),
                 vars_parse(&vars, player, "bullets", 8),
             )
         });
@@ -154,7 +154,7 @@ impl State {
         let enemy = vars.get("enemy").map(|enemy| {
             Enemy::new(
                 ctx,
-                bullet(vars_parse(&vars, enemy, "bullets.speed", 5.)),
+                bullet(vars_parse(&vars, enemy, "bullet.speed", 5.)),
                 vars_parse(&vars, enemy, "bullets", 5),
             )
         });
