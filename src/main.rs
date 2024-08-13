@@ -9,12 +9,6 @@ use touhoulang::parse_text;
 
 type Bullet = Body;
 
-#[derive(PartialEq, Clone)]
-enum Visibility {
-    Visible,
-    Hidden,
-}
-
 struct Spell {
     bullets: Vec<Bullet>,
     shot_timer: Timer,
@@ -24,13 +18,13 @@ struct Spell {
 struct Body {
     rigidbody: Rigidbody,
     sprite: Image,
-    visibility: Visibility,
+    is_visible: bool,
 }
 
 struct Enemy {
     body: Body,
     spell: Spell,
-    velocities: Vec<f32>,
+    directions: Vec<f32>,
     move_timer: Timer,
     health: u32,
 }
@@ -63,20 +57,24 @@ impl Spell {
         }
     }
 
-    fn ready(&mut self, ctx: &Context) -> bool {
-        self.shot_timer.ready(ctx)
+    fn spawn(&mut self, ctx: &Context, position: &Point2<f32>) {
+        if self.shot_timer.ready(ctx) {
+            self.bullets
+                .iter_mut()
+                .find(|x| !x.is_visible)
+                .map(|bullet| {
+                    bullet.set_position(position.x, position.y);
+                    bullet.is_visible = true;
+                });
+        }
     }
 
     fn for_each_visible(&self, f: impl FnMut(&Bullet)) {
-        self.bullets.iter().filter(|x| x.visible()).for_each(f);
+        self.bullets.iter().filter(|x| x.is_visible).for_each(f);
     }
 
     fn mut_for_each_visible(&mut self, f: impl FnMut(&mut Bullet)) {
-        self.bullets.iter_mut().filter(|x| x.visible()).for_each(f);
-    }
-
-    fn find_hidden_then_do(&mut self, f: impl FnOnce(&mut Bullet)) {
-        self.bullets.iter_mut().find(|x| !x.visible()).map(f);
+        self.bullets.iter_mut().filter(|x| x.is_visible).for_each(f);
     }
 }
 
@@ -106,19 +104,15 @@ impl Body {
                 speed,
             },
             sprite: load_image(ctx, image_path),
-            visibility: Visibility::Hidden,
+            is_visible: false,
         }
-    }
-
-    fn visible(&self) -> bool {
-        self.visibility == Visibility::Visible
     }
 }
 
 impl Player {
     fn new(ctx: &Context, bullet: Bullet, bullets_size: usize) -> Self {
         Self {
-            body: Body::new(10.0, [350.0, 350.0], ctx, "/sakuya.png"),
+            body: Body::new(10.0, [350.0, 350.0], ctx, PLAYER_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.1),
         }
     }
@@ -128,69 +122,20 @@ impl Enemy {
     fn new(ctx: &Context, bullet: Bullet, bullets_size: usize) -> Self {
         Self {
             health: 200,
-            body: Body::new(2., [350.0, 100.0], ctx, "/sakuya.png"),
+            body: Body::new(2., [350.0, 100.0], ctx, ENEMY_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.5),
-            velocities: vec![-1., 0., 1., 0., 1., 0., -1., 0.],
+            directions: vec![-1., 0., 1., 0., 1., 0., -1., 0.],
             move_timer: Timer::new(1.5),
         }
     }
-}
 
-impl State {
-    fn new(ctx: &Context) -> Self {
-        let (vars, _) = parse_text(&std::fs::read_to_string("script.touhou").unwrap());
-        dbg!(&vars);
-
-        let bullet = |speed: f32| Bullet::new(speed, [0., 0.], ctx, "/isaac.png");
-
-        let player = vars.get("player").map(|player| {
-            Player::new(
-                ctx,
-                bullet(vars_parse(&vars, player, "bullet.speed", 20.)),
-                vars_parse(&vars, player, "bullets", 8),
-            )
-        });
-
-        let enemy = vars.get("enemy").map(|enemy| {
-            Enemy::new(
-                ctx,
-                bullet(vars_parse(&vars, enemy, "bullet.speed", 5.)),
-                vars_parse(&vars, enemy, "bullets", 5),
-            )
-        });
-
-        let background = vars
-            .get("background")
-            .map(|background| load_image(ctx, &background.replace('"', "/")));
-
-        if let Some(b) = &background {
-            dbg!(b.width(), b.height());
+    fn move_auto(&mut self, ctx: &Context) {
+        if self.move_timer.ready(ctx) {
+            self.directions.rotate_left(1);
         }
 
-        Self {
-            player,
-            enemy,
-            background,
-        }
-    }
-
-    fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
-        if let Some(player) = &mut self.player {
-            if ctx.keyboard.is_key_pressed(key) {
-                player.move_by(dir.0, dir.1);
-            }
-        }
-    }
-
-    fn draw_body(&self, canvas: &mut graphics::Canvas, body: &Body, size: f32, color: Color) {
-        canvas.draw(
-            &body.sprite,
-            graphics::DrawParam::new()
-                .dest(*body.position())
-                .scale([size, size])
-                .color(color)
-                .offset([0.5, 0.5]),
-        );
+        let vel = self.directions.first().unwrap_or(&0.0);
+        self.body.move_by(vel * self.body.speed(), 0.0);
     }
 }
 
@@ -231,74 +176,143 @@ impl Movable for Enemy {
     }
 }
 
+impl State {
+    fn new(ctx: &Context) -> Self {
+        let (vars, _) = parse_text(&std::fs::read_to_string("script.touhou").unwrap());
+        dbg!(&vars);
+
+        let bullet = |speed: f32| Bullet::new(speed, [0., 0.], ctx, BULLET_IMG_PATH);
+
+        let player = vars.get("player").map(|player| {
+            Player::new(
+                ctx,
+                bullet(vars_parse(&vars, player, "bullet.speed", 20.)),
+                vars_parse(&vars, player, "bullets", 8),
+            )
+        });
+
+        let enemy = vars.get("enemy").map(|enemy| {
+            Enemy::new(
+                ctx,
+                bullet(vars_parse(&vars, enemy, "bullet.speed", 5.)),
+                vars_parse(&vars, enemy, "bullets", 5),
+            )
+        });
+
+        let background = vars
+            .get("background")
+            .map(|background| load_image(ctx, &background.replace('"', "/")));
+
+        Self {
+            player,
+            enemy,
+            background,
+        }
+    }
+
+    fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
+        if let Some(player) = &mut self.player {
+            if ctx.keyboard.is_key_pressed(key) {
+                player.move_by(dir.0, dir.1);
+            }
+        }
+    }
+
+    fn draw_body(&self, canvas: &mut graphics::Canvas, body: &Body, size: f32, color: Color) {
+        canvas.draw(
+            &body.sprite,
+            graphics::DrawParam::new()
+                .dest(*body.position())
+                .scale([size, size])
+                .color(color)
+                .offset([0.5, 0.5]),
+        );
+    }
+}
+
+const PLAYER_IMG_PATH: &str = "/sakuya.png";
+const ENEMY_IMG_PATH: &str = "/sakuya.png";
+const BULLET_IMG_PATH: &str = "/isaac.png";
+
+const DIR_UP: (f32, f32) = (0.0, -1.0);
+const DIR_DOWN: (f32, f32) = (0.0, 1.0);
+const DIR_LEFT: (f32, f32) = (-1.0, 0.0);
+const DIR_RIGHT: (f32, f32) = (1.0, 0.0);
+
 impl ggez::event::EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
-        self.if_press_move(&ctx, KeyCode::W, (0.0, -1.0));
-        self.if_press_move(&ctx, KeyCode::S, (0.0, 1.0));
-        self.if_press_move(&ctx, KeyCode::A, (-1.0, 0.0));
-        self.if_press_move(&ctx, KeyCode::D, (1.0, 0.0));
+        self.if_press_move(&ctx, KeyCode::W, DIR_UP);
+        self.if_press_move(&ctx, KeyCode::S, DIR_DOWN);
+        self.if_press_move(&ctx, KeyCode::A, DIR_LEFT);
+        self.if_press_move(&ctx, KeyCode::D, DIR_RIGHT);
 
         if ctx.keyboard.is_key_pressed(KeyCode::R) {
+            println!("Game Restarted!");
             *self = State::new(&ctx);
         }
 
-        if let (Some(player), Some(enemy)) = (&mut self.player, &mut self.enemy) {
-            let player_pos = player.position();
-            let enemy_pos = enemy.position().to_owned();
+        match (&mut self.player, &mut self.enemy) {
+            (Some(player), Some(enemy)) => {
+                enemy.move_auto(&ctx);
 
-            enemy.spell.mut_for_each_visible(|bullet| {
-                bullet.move_by(0.0, 1.0);
-                if bullet.y() > 800.0 {
-                    bullet.visibility = Visibility::Hidden;
-                } else if bullet.position().distance(&player_pos) < 25. {
-                    todo!("You lost, player defeated!");
-                }
-            });
+                let player_pos = player.position();
+                let enemy_pos = enemy.position().to_owned();
 
-            player.spell.mut_for_each_visible(|bullet| {
-                bullet.move_by(0.0, -1.0);
-                let hit_enemy = bullet.position().distance(&enemy_pos) < 100.;
+                enemy.spell.mut_for_each_visible(|bullet| {
+                    bullet.move_by(0.0, 1.0);
+                    if bullet.y() > 800.0 {
+                        bullet.is_visible = false;
+                    } else if bullet.position().distance(&player_pos) < 25. {
+                        todo!("You lost, player defeated!");
+                    }
+                });
 
-                if bullet.y() < 0.0 || hit_enemy {
-                    bullet.visibility = Visibility::Hidden;
-                }
+                player.spell.mut_for_each_visible(|bullet| {
+                    bullet.move_by(0.0, -1.0);
+                    let hit_enemy = bullet.position().distance(&enemy_pos) < 100.;
 
-                if hit_enemy {
-                    enemy.health -= 1;
-                    if enemy.health == 0 {
-                        todo!("You won, enemy defeated!");
+                    if bullet.y() < 0.0 || hit_enemy {
+                        bullet.is_visible = false;
                     }
 
-                    if enemy.health % 5 == 0 {
-                        println!("Enemy health: {}", enemy.health);
+                    if hit_enemy {
+                        enemy.health -= 1;
+                        if enemy.health == 0 {
+                            todo!("You won, enemy defeated!");
+                        }
+
+                        if enemy.health % 5 == 0 {
+                            println!("Enemy health: {}", enemy.health);
+                        }
                     }
-                }
-            });
-
-            if player.spell.ready(&ctx) {
-                let (x, y) = (player.x(), player.y());
-
-                player.spell.find_hidden_then_do(|bullet| {
-                    bullet.set_position(x, y);
-                    bullet.visibility = Visibility::Visible;
                 });
+
+                player.spell.spawn(&ctx, &player.body.position());
+                enemy.spell.spawn(&ctx, &enemy.body.position());
             }
-
-            if enemy.spell.ready(&ctx) {
-                let (x, y) = (enemy.x(), enemy.y());
-
-                enemy.spell.find_hidden_then_do(|bullet| {
-                    bullet.set_position(x, y);
-                    bullet.visibility = Visibility::Visible;
+            (Some(player), None) => {
+                player.spell.mut_for_each_visible(|bullet| {
+                    bullet.move_by(0.0, -1.0);
+                    if bullet.y() < 0.0 {
+                        bullet.is_visible = false;
+                    }
                 });
-            }
 
-            if enemy.move_timer.ready(&ctx) {
-                enemy.velocities.rotate_left(1);
+                player.spell.spawn(&ctx, &player.body.position());
             }
+            (None, Some(enemy)) => {
+                enemy.move_auto(&ctx);
 
-            let vel = enemy.velocities.first().unwrap_or(&0.0);
-            enemy.move_by(vel * enemy.speed(), 0.0);
+                enemy.spell.mut_for_each_visible(|bullet| {
+                    bullet.move_by(0.0, 1.0);
+                    if bullet.y() > 800.0 {
+                        bullet.is_visible = false;
+                    }
+                });
+
+                enemy.spell.spawn(&ctx, &enemy.body.position());
+            }
+            (None, None) => {}
         }
 
         Ok(())
@@ -308,15 +322,20 @@ impl ggez::event::EventHandler<GameError> for State {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
 
         if let Some(background) = &self.background {
-            canvas.draw(background, graphics::DrawParam::default());
+            let (w, h) = (background.width() as f32, background.height() as f32);
+            let (win_w, win_h) = ctx.gfx.size();
+            canvas.draw(
+                background,
+                graphics::DrawParam::default().scale([win_w / w, win_h / h]),
+            );
         }
 
         if let Some(player) = &self.player {
             player.spell.for_each_visible(|bullet| {
-                self.draw_body(&mut canvas, &bullet, 0.05, Color::RED);
+                self.draw_body(&mut canvas, &bullet, 0.05, Color::CYAN);
             });
-            self.draw_body(&mut canvas, &player.body, 0.12, Color::WHITE);
 
+            self.draw_body(&mut canvas, &player.body, 0.12, Color::WHITE);
             let circle = graphics::Mesh::new_circle(
                 ctx,
                 graphics::DrawMode::fill(),
