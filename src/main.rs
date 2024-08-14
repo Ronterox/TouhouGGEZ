@@ -49,7 +49,6 @@ struct Health {
     health: u32,
     max_health: u32,
     on_hit: fn(u32),
-    on_death: fn(&mut State),
 }
 
 trait Distance {
@@ -57,12 +56,11 @@ trait Distance {
 }
 
 impl Health {
-    fn take_damage(&mut self, state: &mut State, damage: u32) {
+    fn take_damage(&mut self, damage: u32) -> bool {
         self.health = self.health.saturating_sub(damage);
         (self.on_hit)(self.health);
-        if self.health == 0 {
-            (self.on_death)(state);
-        }
+
+        self.health == 0
     }
 
     fn percentage(&self) -> f32 {
@@ -137,9 +135,6 @@ impl Player {
                 health,
                 max_health: health,
                 on_hit: |_| {},
-                on_death: |state| {
-                    state.player = None;
-                },
             },
             body: Body::new(10.0, [350.0, 350.0], ctx, PLAYER_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.1),
@@ -154,9 +149,6 @@ impl Enemy {
                 health,
                 max_health: health,
                 on_hit: |hp| println!("Enemy Health: {hp}"),
-                on_death: |state| {
-                    state.enemy = None;
-                },
             },
             body: Body::new(speed, [350.0, 100.0], ctx, ENEMY_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.5),
@@ -290,6 +282,8 @@ impl ggez::event::EventHandler<GameError> for State {
             *self = State::new(&ctx);
         }
 
+        let mut player_died = false;
+        let mut enemy_died = false;
         match (&mut self.player, &mut self.enemy) {
             (Some(player), Some(enemy)) => {
                 enemy.move_auto(&ctx);
@@ -306,7 +300,7 @@ impl ggez::event::EventHandler<GameError> for State {
                     }
 
                     if hit_player {
-                        player.health.take_damage(self, 1);
+                        player_died = player.health.take_damage(1);
                     }
                 });
 
@@ -319,7 +313,7 @@ impl ggez::event::EventHandler<GameError> for State {
                     }
 
                     if hit_enemy {
-                        enemy.health.take_damage(self, 1);
+                        enemy_died = enemy.health.take_damage(1);
                     }
                 });
 
@@ -349,6 +343,14 @@ impl ggez::event::EventHandler<GameError> for State {
                 enemy.spell.spawn(&ctx, &enemy.body.position());
             }
             (None, None) => {}
+        }
+
+        if player_died {
+            self.player = None;
+        }
+
+        if enemy_died {
+            self.enemy = None;
         }
 
         Ok(())
