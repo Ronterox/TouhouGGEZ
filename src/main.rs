@@ -2,10 +2,9 @@ mod physics;
 
 use std::{collections::HashMap, str::FromStr};
 
-use ggez::{graphics::Color, graphics::Image, input::keyboard::KeyCode, *};
+use ggez::{graphics::*, input::keyboard::KeyCode, *};
 use mint::Point2;
 use physics::{Movable, Rigidbody};
-use touhoulang::parse_text;
 
 type Bullet = Body;
 
@@ -48,8 +47,9 @@ struct State {
 
 struct Health {
     health: u32,
+    max_health: u32,
     on_hit: fn(u32),
-    on_death: fn(),
+    on_death: fn(&mut State),
 }
 
 trait Distance {
@@ -57,12 +57,16 @@ trait Distance {
 }
 
 impl Health {
-    fn take_damage(&mut self, damage: u32) {
+    fn take_damage(&mut self, state: &mut State, damage: u32) {
         self.health = self.health.saturating_sub(damage);
         (self.on_hit)(self.health);
         if self.health == 0 {
-            (self.on_death)()
+            (self.on_death)(state);
         }
+    }
+
+    fn percentage(&self) -> f32 {
+        self.health as f32 / self.max_health as f32
     }
 }
 
@@ -131,8 +135,11 @@ impl Player {
         Self {
             health: Health {
                 health,
+                max_health: health,
                 on_hit: |_| {},
-                on_death: || todo!("You lost, player defeat!"),
+                on_death: |state| {
+                    state.player = None;
+                },
             },
             body: Body::new(10.0, [350.0, 350.0], ctx, PLAYER_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.1),
@@ -145,8 +152,11 @@ impl Enemy {
         Self {
             health: Health {
                 health,
+                max_health: health,
                 on_hit: |hp| println!("Enemy Health: {hp}"),
-                on_death: || todo!("You won, enemy defeat!"),
+                on_death: |state| {
+                    state.enemy = None;
+                },
             },
             body: Body::new(speed, [350.0, 100.0], ctx, ENEMY_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.5),
@@ -204,7 +214,7 @@ impl Movable for Enemy {
 
 impl State {
     fn new(ctx: &Context) -> Self {
-        let (vars, _) = parse_text(&std::fs::read_to_string("script.touhou").unwrap());
+        let (vars, _) = touhoulang::parse_text(&std::fs::read_to_string("script.touhou").unwrap());
         dbg!(&vars);
 
         let bullet = |speed: f32| Bullet::new(speed, [0., 0.], ctx, BULLET_IMG_PATH);
@@ -247,10 +257,10 @@ impl State {
         }
     }
 
-    fn draw_body(&self, canvas: &mut graphics::Canvas, body: &Body, size: f32, color: Color) {
+    fn draw_body(&self, canvas: &mut Canvas, body: &Body, size: f32, color: Color) {
         canvas.draw(
             &body.sprite,
-            graphics::DrawParam::new()
+            DrawParam::new()
                 .dest(*body.position())
                 .scale([size, size])
                 .color(color)
@@ -296,7 +306,7 @@ impl ggez::event::EventHandler<GameError> for State {
                     }
 
                     if hit_player {
-                        player.health.take_damage(1);
+                        player.health.take_damage(self, 1);
                     }
                 });
 
@@ -309,7 +319,7 @@ impl ggez::event::EventHandler<GameError> for State {
                     }
 
                     if hit_enemy {
-                        enemy.health.take_damage(1);
+                        enemy.health.take_damage(self, 1);
                     }
                 });
 
@@ -345,14 +355,14 @@ impl ggez::event::EventHandler<GameError> for State {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        let mut canvas = graphics::Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
+        let mut canvas = Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
 
         if let Some(background) = &self.background {
             let (w, h) = (background.width() as f32, background.height() as f32);
             let (win_w, win_h) = ctx.gfx.size();
             canvas.draw(
                 background,
-                graphics::DrawParam::default().scale([win_w / w, win_h / h]),
+                DrawParam::default().scale([win_w / w, win_h / h]),
             );
         }
 
@@ -362,16 +372,16 @@ impl ggez::event::EventHandler<GameError> for State {
             });
 
             self.draw_body(&mut canvas, &player.body, 0.12, Color::WHITE);
-            let circle = graphics::Mesh::new_circle(
+            let circle = Mesh::new_circle(
                 ctx,
-                graphics::DrawMode::fill(),
+                DrawMode::fill(),
                 *player.body.position(),
                 10.,
                 0.1,
                 Color::from_rgba(255, 0, 0, 127),
             )?;
 
-            canvas.draw(&circle, graphics::DrawParam::default());
+            canvas.draw(&circle, DrawParam::default());
         }
 
         if let Some(enemy) = &self.enemy {
@@ -380,6 +390,18 @@ impl ggez::event::EventHandler<GameError> for State {
             });
 
             self.draw_body(&mut canvas, &enemy.body, 0.2, Color::BLACK);
+
+            let healthbar = Mesh::new_rectangle(
+                ctx,
+                DrawMode::fill(),
+                Rect::new(0.0, 0.0, enemy.health.percentage() * 100., 10.0),
+                Color::from_rgba(255, 0, 0, 127),
+            )?;
+
+            canvas.draw(
+                &healthbar,
+                DrawParam::default().dest([enemy.x() - 50.0, enemy.y() - 90.0]),
+            );
         }
 
         canvas.finish(ctx)
