@@ -15,7 +15,7 @@ pub trait Movable {
     fn y(&self) -> f32 {
         self.position().y
     }
-    fn move_by(&mut self, x: f32, y: f32) {
+    fn move_by(&mut self, (x, y): (f32, f32)) {
         let spd = self.speed();
         self.set_position(self.x() + x * spd, self.y() + y * spd);
     }

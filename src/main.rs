@@ -22,14 +22,15 @@ struct Body {
 }
 
 struct Enemy {
+    health: Health,
     body: Body,
     spell: Spell,
-    directions: Vec<f32>,
     move_timer: Timer,
-    health: u32,
+    directions: Vec<f32>,
 }
 
 struct Player {
+    health: Health,
     body: Body,
     spell: Spell,
 }
@@ -45,8 +46,24 @@ struct State {
     background: Option<Image>,
 }
 
+struct Health {
+    health: u32,
+    on_hit: fn(u32),
+    on_death: fn(),
+}
+
 trait Distance {
     fn distance(&self, other: &Self) -> f32;
+}
+
+impl Health {
+    fn take_damage(&mut self, damage: u32) {
+        self.health = self.health.saturating_sub(damage);
+        (self.on_hit)(self.health);
+        if self.health == 0 {
+            (self.on_death)()
+        }
+    }
 }
 
 impl Spell {
@@ -110,8 +127,13 @@ impl Body {
 }
 
 impl Player {
-    fn new(ctx: &Context, bullet: Bullet, bullets_size: usize) -> Self {
+    fn new(ctx: &Context, health: u32, bullet: Bullet, bullets_size: usize) -> Self {
         Self {
+            health: Health {
+                health,
+                on_hit: |_| {},
+                on_death: || todo!("You lost, player defeat!"),
+            },
             body: Body::new(10.0, [350.0, 350.0], ctx, PLAYER_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.1),
         }
@@ -119,10 +141,14 @@ impl Player {
 }
 
 impl Enemy {
-    fn new(ctx: &Context, bullet: Bullet, bullets_size: usize) -> Self {
+    fn new(ctx: &Context, health: u32, speed: f32, bullet: Bullet, bullets_size: usize) -> Self {
         Self {
-            health: 200,
-            body: Body::new(2., [350.0, 100.0], ctx, ENEMY_IMG_PATH),
+            health: Health {
+                health,
+                on_hit: |hp| println!("Enemy Health: {hp}"),
+                on_death: || todo!("You won, enemy defeat!"),
+            },
+            body: Body::new(speed, [350.0, 100.0], ctx, ENEMY_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.5),
             directions: vec![-1., 0., 1., 0., 1., 0., -1., 0.],
             move_timer: Timer::new(1.5),
@@ -135,7 +161,7 @@ impl Enemy {
         }
 
         let vel = self.directions.first().unwrap_or(&0.0);
-        self.body.move_by(vel * self.body.speed(), 0.0);
+        self.body.move_by((*vel, 0.0));
     }
 }
 
@@ -186,6 +212,7 @@ impl State {
         let player = vars.get("player").map(|player| {
             Player::new(
                 ctx,
+                vars_parse(&vars, player, "health", 1),
                 bullet(vars_parse(&vars, player, "bullet.speed", 20.)),
                 vars_parse(&vars, player, "bullets", 8),
             )
@@ -194,6 +221,8 @@ impl State {
         let enemy = vars.get("enemy").map(|enemy| {
             Enemy::new(
                 ctx,
+                vars_parse(&vars, enemy, "health", 200),
+                vars_parse(&vars, enemy, "speed", 4.0),
                 bullet(vars_parse(&vars, enemy, "bullet.speed", 5.)),
                 vars_parse(&vars, enemy, "bullets", 5),
             )
@@ -213,7 +242,7 @@ impl State {
     fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
         if let Some(player) = &mut self.player {
             if ctx.keyboard.is_key_pressed(key) {
-                player.move_by(dir.0, dir.1);
+                player.move_by(dir);
             }
         }
     }
@@ -255,20 +284,24 @@ impl ggez::event::EventHandler<GameError> for State {
             (Some(player), Some(enemy)) => {
                 enemy.move_auto(&ctx);
 
-                let player_pos = player.position();
+                let player_pos = player.position().to_owned();
                 let enemy_pos = enemy.position().to_owned();
 
                 enemy.spell.mut_for_each_visible(|bullet| {
-                    bullet.move_by(0.0, 1.0);
-                    if bullet.y() > 800.0 {
+                    bullet.move_by(DIR_DOWN);
+                    let hit_player = bullet.position().distance(&player_pos) < 25.;
+
+                    if bullet.y() > 800.0 || hit_player {
                         bullet.is_visible = false;
-                    } else if bullet.position().distance(&player_pos) < 25. {
-                        todo!("You lost, player defeated!");
+                    }
+
+                    if hit_player {
+                        player.health.take_damage(1);
                     }
                 });
 
                 player.spell.mut_for_each_visible(|bullet| {
-                    bullet.move_by(0.0, -1.0);
+                    bullet.move_by(DIR_UP);
                     let hit_enemy = bullet.position().distance(&enemy_pos) < 100.;
 
                     if bullet.y() < 0.0 || hit_enemy {
@@ -276,14 +309,7 @@ impl ggez::event::EventHandler<GameError> for State {
                     }
 
                     if hit_enemy {
-                        enemy.health -= 1;
-                        if enemy.health == 0 {
-                            todo!("You won, enemy defeated!");
-                        }
-
-                        if enemy.health % 5 == 0 {
-                            println!("Enemy health: {}", enemy.health);
-                        }
+                        enemy.health.take_damage(1);
                     }
                 });
 
@@ -292,7 +318,7 @@ impl ggez::event::EventHandler<GameError> for State {
             }
             (Some(player), None) => {
                 player.spell.mut_for_each_visible(|bullet| {
-                    bullet.move_by(0.0, -1.0);
+                    bullet.move_by(DIR_UP);
                     if bullet.y() < 0.0 {
                         bullet.is_visible = false;
                     }
@@ -304,7 +330,7 @@ impl ggez::event::EventHandler<GameError> for State {
                 enemy.move_auto(&ctx);
 
                 enemy.spell.mut_for_each_visible(|bullet| {
-                    bullet.move_by(0.0, 1.0);
+                    bullet.move_by(DIR_DOWN);
                     if bullet.y() > 800.0 {
                         bullet.is_visible = false;
                     }
