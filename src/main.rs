@@ -48,17 +48,18 @@ struct Particle {
     timer: Timer,
 }
 
+struct Health {
+    health: u32,
+    max_health: u32,
+    on_hit: fn(health: u32),
+}
+
 struct State {
     player: Option<Player>,
     enemy: Option<Enemy>,
     background: Option<Image>,
     particles: Vec<Particle>,
-}
-
-struct Health {
-    health: u32,
-    max_health: u32,
-    on_hit: fn(u32),
+    texts: Vec<Text>,
 }
 
 trait Distance {
@@ -287,6 +288,7 @@ impl State {
             enemy,
             background,
             particles: vec![],
+            texts: vec![],
         }
     }
 
@@ -318,6 +320,19 @@ const DIR_UP: (f32, f32) = (0.0, -1.0);
 const DIR_DOWN: (f32, f32) = (0.0, 1.0);
 const DIR_LEFT: (f32, f32) = (-1.0, 0.0);
 const DIR_RIGHT: (f32, f32) = (1.0, 0.0);
+
+fn centered_text(text: &str) -> Text {
+    Text::new(TextFragment {
+        text: text.to_owned(),
+        scale: Some(PxScale::from(40.0)),
+        ..Default::default()
+    })
+    .set_layout(TextLayout {
+        h_align: TextAlign::Middle,
+        v_align: TextAlign::Middle,
+    })
+    .to_owned()
+}
 
 impl ggez::event::EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
@@ -406,10 +421,12 @@ impl ggez::event::EventHandler<GameError> for State {
                     .push(Particle::new(ctx, 2.0, start_pos, 5.0, dir));
             }
             self.player = None;
+            self.texts.push(centered_text("You died! Press R to restart."));
         }
 
         if enemy_died {
             self.enemy = None;
+            self.texts.push(centered_text("You win! Press R to restart."));
         }
 
         let mut remove = false;
@@ -429,10 +446,10 @@ impl ggez::event::EventHandler<GameError> for State {
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
+        let (win_w, win_h) = ctx.gfx.size();
 
         if let Some(background) = &self.background {
             let (w, h) = (background.width() as f32, background.height() as f32);
-            let (win_w, win_h) = ctx.gfx.size();
             canvas.draw(
                 background,
                 DrawParam::default().scale([win_w / w, win_h / h]),
@@ -477,9 +494,13 @@ impl ggez::event::EventHandler<GameError> for State {
             );
         }
 
-        for particle in &self.particles {
+        self.particles.iter().for_each(|particle| {
             self.draw_body(&mut canvas, &particle.bullet.body, 0.05, Color::MAGENTA);
-        }
+        });
+
+        self.texts.iter().for_each(|text| {
+            canvas.draw(text, DrawParam::default().dest([win_w / 2.0, win_h / 2.0]));
+        });
 
         canvas.finish(ctx)
     }
@@ -489,11 +510,11 @@ fn vars_parse<T: FromStr + Default>(
     vars: &HashMap<String, String>,
     key: &str,
     params: &str,
-    unless: T,
+    default: T,
 ) -> T {
     vars.get(format!("{key}.{params}").as_str())
         .map(|x| x.parse().unwrap_or_default())
-        .unwrap_or(unless)
+        .unwrap_or(default)
 }
 
 fn load_image(ctx: &Context, path: &str) -> Image {
