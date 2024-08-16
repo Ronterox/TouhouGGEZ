@@ -6,18 +6,22 @@ use ggez::{graphics::*, input::keyboard::KeyCode, *};
 use mint::Point2;
 use physics::{Movable, Rigidbody};
 
-type Bullet = Body;
-
-struct Spell {
-    bullets: Vec<Bullet>,
-    shot_timer: Timer,
-}
-
 #[derive(Clone)]
 struct Body {
     rigidbody: Rigidbody,
     sprite: Image,
+}
+
+#[derive(Clone)]
+struct Bullet {
+    body: Body,
     is_visible: bool,
+    direction: (f32, f32),
+}
+
+struct Spell {
+    bullets: Vec<Bullet>,
+    shot_timer: Timer,
 }
 
 struct Enemy {
@@ -39,10 +43,16 @@ struct Timer {
     delay: f32,
 }
 
+struct Particle {
+    bullet: Bullet,
+    timer: Timer,
+}
+
 struct State {
     player: Option<Player>,
     enemy: Option<Enemy>,
     background: Option<Image>,
+    particles: Vec<Particle>,
 }
 
 struct Health {
@@ -53,6 +63,27 @@ struct Health {
 
 trait Distance {
     fn distance(&self, other: &Self) -> f32;
+}
+
+impl Particle {
+    fn new(ctx: &Context, ttl: f32, position: [f32; 2], speed: f32, direction: (f32, f32)) -> Self {
+        let mut bullet = Bullet::new(ctx, speed, direction);
+        bullet.body.set_position(position[0], position[1]);
+        bullet.is_visible = true;
+
+        Self {
+            bullet,
+            timer: Timer::new(ttl),
+        }
+    }
+
+    fn update(&mut self, ctx: &Context) {
+        if self.timer.ready(ctx) {
+            self.bullet.is_visible = false;
+        } else {
+            self.bullet.body.move_by(self.bullet.direction);
+        }
+    }
 }
 
 impl Health {
@@ -82,7 +113,7 @@ impl Spell {
                 .iter_mut()
                 .find(|x| !x.is_visible)
                 .map(|bullet| {
-                    bullet.set_position(position.x, position.y);
+                    bullet.body.set_position(position.x, position.y);
                     bullet.is_visible = true;
                 });
         }
@@ -123,8 +154,25 @@ impl Body {
                 speed,
             },
             sprite: load_image(ctx, image_path),
-            is_visible: false,
         }
+    }
+}
+
+impl Bullet {
+    fn new(ctx: &Context, speed: f32, direction: (f32, f32)) -> Self {
+        Self {
+            body: Body::new(speed, [0.0, 0.0], ctx, BULLET_IMG_PATH),
+            is_visible: false,
+            direction,
+        }
+    }
+
+    fn update(&mut self) {
+        self.body.move_by(self.direction);
+    }
+
+    fn collided(&self, _other: &Point2<f32>, hitbox_size: f32) -> bool {
+        self.body.position().distance(_other) < hitbox_size
     }
 }
 
@@ -209,13 +257,13 @@ impl State {
         let (vars, _) = touhoulang::parse_text(&std::fs::read_to_string("script.touhou").unwrap());
         dbg!(&vars);
 
-        let bullet = |speed: f32| Bullet::new(speed, [0., 0.], ctx, BULLET_IMG_PATH);
+        let bullet = |speed: f32, direction: (f32, f32)| Bullet::new(ctx, speed, direction);
 
         let player = vars.get("player").map(|player| {
             Player::new(
                 ctx,
                 vars_parse(&vars, player, "health", 1),
-                bullet(vars_parse(&vars, player, "bullet.speed", 20.)),
+                bullet(vars_parse(&vars, player, "bullet.speed", 20.), DIR_UP),
                 vars_parse(&vars, player, "bullets", 8),
             )
         });
@@ -225,7 +273,7 @@ impl State {
                 ctx,
                 vars_parse(&vars, enemy, "health", 200),
                 vars_parse(&vars, enemy, "speed", 4.0),
-                bullet(vars_parse(&vars, enemy, "bullet.speed", 5.)),
+                bullet(vars_parse(&vars, enemy, "bullet.speed", 5.), DIR_DOWN),
                 vars_parse(&vars, enemy, "bullets", 5),
             )
         });
@@ -238,6 +286,7 @@ impl State {
             player,
             enemy,
             background,
+            particles: vec![],
         }
     }
 
@@ -292,10 +341,10 @@ impl ggez::event::EventHandler<GameError> for State {
                 let enemy_pos = enemy.position().to_owned();
 
                 enemy.spell.mut_for_each_visible(|bullet| {
-                    bullet.move_by(DIR_DOWN);
-                    let hit_player = bullet.position().distance(&player_pos) < 25.;
+                    bullet.update();
+                    let hit_player = bullet.collided(&player_pos, 25.);
 
-                    if bullet.y() > 800.0 || hit_player {
+                    if bullet.body.y() > 800.0 || hit_player {
                         bullet.is_visible = false;
                     }
 
@@ -305,15 +354,19 @@ impl ggez::event::EventHandler<GameError> for State {
                 });
 
                 player.spell.mut_for_each_visible(|bullet| {
-                    bullet.move_by(DIR_UP);
-                    let hit_enemy = bullet.position().distance(&enemy_pos) < 100.;
+                    bullet.update();
+                    let hit_enemy = bullet.collided(&enemy_pos, 100.);
 
-                    if bullet.y() < 0.0 || hit_enemy {
+                    if bullet.body.y() < 0.0 || hit_enemy {
                         bullet.is_visible = false;
                     }
 
                     if hit_enemy {
                         enemy_died = enemy.health.take_damage(1);
+                        let enemy_pos = [enemy.x(), enemy.y()];
+                        let dir = (enemy.directions[1], enemy.directions[0]);
+                        self.particles
+                            .push(Particle::new(&ctx, 0.5, enemy_pos, 2., dir));
                     }
                 });
 
@@ -322,8 +375,8 @@ impl ggez::event::EventHandler<GameError> for State {
             }
             (Some(player), None) => {
                 player.spell.mut_for_each_visible(|bullet| {
-                    bullet.move_by(DIR_UP);
-                    if bullet.y() < 0.0 {
+                    bullet.update();
+                    if bullet.body.y() < 0.0 {
                         bullet.is_visible = false;
                     }
                 });
@@ -334,8 +387,8 @@ impl ggez::event::EventHandler<GameError> for State {
                 enemy.move_auto(&ctx);
 
                 enemy.spell.mut_for_each_visible(|bullet| {
-                    bullet.move_by(DIR_DOWN);
-                    if bullet.y() > 800.0 {
+                    bullet.update();
+                    if bullet.body.y() > 800.0 {
                         bullet.is_visible = false;
                     }
                 });
@@ -346,11 +399,29 @@ impl ggez::event::EventHandler<GameError> for State {
         }
 
         if player_died {
+            let player = self.player.as_mut().unwrap();
+            let start_pos = [player.x(), player.y()];
+            for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
+                self.particles
+                    .push(Particle::new(ctx, 2.0, start_pos, 5.0, dir));
+            }
             self.player = None;
         }
 
         if enemy_died {
             self.enemy = None;
+        }
+
+        let mut remove = false;
+        self.particles.iter_mut().for_each(|particle| {
+            particle.update(ctx);
+            if !particle.bullet.is_visible {
+                remove = true;
+            }
+        });
+
+        if remove {
+            self.particles.retain(|particle| particle.bullet.is_visible);
         }
 
         Ok(())
@@ -370,7 +441,7 @@ impl ggez::event::EventHandler<GameError> for State {
 
         if let Some(player) = &self.player {
             player.spell.for_each_visible(|bullet| {
-                self.draw_body(&mut canvas, &bullet, 0.05, Color::CYAN);
+                self.draw_body(&mut canvas, &bullet.body, 0.05, Color::CYAN);
             });
 
             self.draw_body(&mut canvas, &player.body, 0.12, Color::WHITE);
@@ -388,7 +459,7 @@ impl ggez::event::EventHandler<GameError> for State {
 
         if let Some(enemy) = &self.enemy {
             enemy.spell.for_each_visible(|bullet| {
-                self.draw_body(&mut canvas, &bullet, 0.1, Color::RED);
+                self.draw_body(&mut canvas, &bullet.body, 0.1, Color::RED);
             });
 
             self.draw_body(&mut canvas, &enemy.body, 0.2, Color::BLACK);
@@ -404,6 +475,10 @@ impl ggez::event::EventHandler<GameError> for State {
                 &healthbar,
                 DrawParam::default().dest([enemy.x() - 50.0, enemy.y() - 90.0]),
             );
+        }
+
+        for particle in &self.particles {
+            self.draw_body(&mut canvas, &particle.bullet.body, 0.05, Color::MAGENTA);
         }
 
         canvas.finish(ctx)
