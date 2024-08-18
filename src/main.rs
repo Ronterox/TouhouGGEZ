@@ -55,11 +55,11 @@ struct Health {
 }
 
 struct State {
-    player: Option<Player>,
-    enemy: Option<Enemy>,
-    background: Option<Image>,
+    players: Vec<Player>,
+    enemies: Vec<Enemy>,
     particles: Vec<Particle>,
     texts: Vec<Text>,
+    background: Option<Image>,
 }
 
 trait Distance {
@@ -95,6 +95,10 @@ impl Health {
         self.health == 0
     }
 
+    fn is_alive(&self) -> bool {
+        self.health > 0
+    }
+
     fn percentage(&self) -> f32 {
         self.health as f32 / self.max_health as f32
     }
@@ -124,7 +128,7 @@ impl Spell {
         self.bullets.iter().filter(|x| x.is_visible).for_each(f);
     }
 
-    fn mut_for_each_visible(&mut self, f: impl FnMut(&mut Bullet)) {
+    fn for_each_visible_mut(&mut self, f: impl FnMut(&mut Bullet)) {
         self.bullets.iter_mut().filter(|x| x.is_visible).for_each(f);
     }
 }
@@ -260,6 +264,7 @@ impl State {
 
         let bullet = |speed: f32, direction: (f32, f32)| Bullet::new(ctx, speed, direction);
 
+        let mut players = vec![];
         let player = vars.get("player").map(|player| {
             Player::new(
                 ctx,
@@ -269,6 +274,11 @@ impl State {
             )
         });
 
+        if let Some(player) = player {
+            players.push(player);
+        }
+
+        let mut enemies = vec![];
         let enemy = vars.get("enemy").map(|enemy| {
             Enemy::new(
                 ctx,
@@ -279,13 +289,17 @@ impl State {
             )
         });
 
+        if let Some(enemy) = enemy {
+            enemies.push(enemy);
+        }
+
         let background = vars
             .get("background")
             .map(|background| load_image(ctx, &background.replace('"', "/")));
 
         Self {
-            player,
-            enemy,
+            players,
+            enemies,
             background,
             particles: vec![],
             texts: vec![],
@@ -293,10 +307,10 @@ impl State {
     }
 
     fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
-        if let Some(player) = &mut self.player {
-            if ctx.keyboard.is_key_pressed(key) {
+        if ctx.keyboard.is_key_pressed(key) {
+            self.players.iter_mut().for_each(|player| {
                 player.move_by(dir);
-            }
+            });
         }
     }
 
@@ -341,105 +355,87 @@ impl ggez::event::EventHandler<GameError> for State {
         self.if_press_move(&ctx, KeyCode::A, DIR_LEFT);
         self.if_press_move(&ctx, KeyCode::D, DIR_RIGHT);
 
-        if ctx.keyboard.is_key_pressed(KeyCode::R) {
+        if ctx.keyboard.is_key_just_pressed(KeyCode::R) {
             println!("Game Restarted!");
             *self = State::new(&ctx);
         }
 
-        let mut player_died = false;
-        let mut enemy_died = false;
-        match (&mut self.player, &mut self.enemy) {
-            (Some(player), Some(enemy)) => {
-                enemy.move_auto(&ctx);
+        let mut enemy_death = false;
+        let mut player_death = false;
 
-                let player_pos = player.position().to_owned();
-                let enemy_pos = enemy.position().to_owned();
+        self.enemies.iter_mut().for_each(|enemy| {
+            enemy.move_auto(&ctx);
 
-                enemy.spell.mut_for_each_visible(|bullet| {
-                    bullet.update();
-                    let hit_player = bullet.collided(&player_pos, 25.);
+            enemy.spell.for_each_visible_mut(|bullet| {
+                bullet.update();
 
-                    if bullet.body.y() > 800.0 || hit_player {
-                        bullet.is_visible = false;
-                    }
-
-                    if hit_player {
-                        player_died = player.health.take_damage(1);
+                let mut hit_player = false;
+                self.players.iter_mut().for_each(|player| {
+                    if bullet.collided(player.position(), 25.) {
+                        player_death = player.health.take_damage(1);
+                        hit_player = true;
                     }
                 });
 
-                player.spell.mut_for_each_visible(|bullet| {
-                    bullet.update();
-                    let hit_enemy = bullet.collided(&enemy_pos, 100.);
+                if bullet.body.y() > 800.0 || hit_player {
+                    bullet.is_visible = false;
+                }
+            });
 
-                    if bullet.body.y() < 0.0 || hit_enemy {
-                        bullet.is_visible = false;
-                    }
-
-                    if hit_enemy {
-                        enemy_died = enemy.health.take_damage(1);
-                        let enemy_pos = [enemy.x(), enemy.y()];
-                        let dir = (enemy.directions[1], enemy.directions[0]);
-                        self.particles
-                            .push(Particle::new(&ctx, 0.5, enemy_pos, 2., dir));
-                    }
-                });
-
-                player.spell.spawn(&ctx, &player.body.position());
-                enemy.spell.spawn(&ctx, &enemy.body.position());
-            }
-            (Some(player), None) => {
-                player.spell.mut_for_each_visible(|bullet| {
-                    bullet.update();
-                    if bullet.body.y() < 0.0 {
-                        bullet.is_visible = false;
-                    }
-                });
-
-                player.spell.spawn(&ctx, &player.body.position());
-            }
-            (None, Some(enemy)) => {
-                enemy.move_auto(&ctx);
-
-                enemy.spell.mut_for_each_visible(|bullet| {
-                    bullet.update();
-                    if bullet.body.y() > 800.0 {
-                        bullet.is_visible = false;
-                    }
-                });
-
-                enemy.spell.spawn(&ctx, &enemy.body.position());
-            }
-            (None, None) => {}
-        }
-
-        if player_died {
-            let player = self.player.as_mut().unwrap();
-            let start_pos = [player.x(), player.y()];
-            for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
-                self.particles
-                    .push(Particle::new(ctx, 2.0, start_pos, 5.0, dir));
-            }
-            self.player = None;
-            self.texts.push(centered_text("You died! Press R to restart."));
-        }
-
-        if enemy_died {
-            self.enemy = None;
-            self.texts.push(centered_text("You win! Press R to restart."));
-        }
-
-        let mut remove = false;
-        self.particles.iter_mut().for_each(|particle| {
-            particle.update(ctx);
-            if !particle.bullet.is_visible {
-                remove = true;
-            }
+            enemy.spell.spawn(&ctx, &enemy.body.position());
         });
 
-        if remove {
-            self.particles.retain(|particle| particle.bullet.is_visible);
+        self.players.iter_mut().for_each(|player| {
+            player.spell.for_each_visible_mut(|bullet| {
+                bullet.update();
+
+                let mut hit_enemy = false;
+                self.enemies.iter_mut().for_each(|enemy| {
+                    if bullet.collided(enemy.position(), 100.) {
+                        enemy_death = enemy.health.take_damage(1);
+                        hit_enemy = true;
+                    }
+                });
+
+                if bullet.body.y() < 0.0 || hit_enemy {
+                    bullet.is_visible = false;
+                }
+            });
+
+            player.spell.spawn(&ctx, &player.body.position());
+        });
+
+        if player_death {
+            self.players.retain(|player| {
+                let is_alive = player.health.is_alive();
+                if !is_alive {
+                    let start_pos = [player.x(), player.y()];
+                    for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
+                        self.particles
+                            .push(Particle::new(ctx, 2.0, start_pos, 5.0, dir));
+                    }
+                }
+                is_alive
+            });
+
+            if self.players.is_empty() {
+                self.texts
+                    .push(centered_text("You died! Press R to restart."));
+            }
         }
+
+        if enemy_death {
+            self.enemies.retain(|enemy| enemy.health.is_alive());
+            if self.enemies.is_empty() {
+                self.texts
+                    .push(centered_text("You win! Press R to restart."));
+            }
+        }
+
+        self.particles.retain_mut(|particle| {
+            particle.update(ctx);
+            particle.bullet.is_visible
+        });
 
         Ok(())
     }
@@ -456,12 +452,13 @@ impl ggez::event::EventHandler<GameError> for State {
             );
         }
 
-        if let Some(player) = &self.player {
+        self.players.iter().for_each(|player| {
+            self.draw_body(&mut canvas, &player.body, 0.12, Color::WHITE);
+
             player.spell.for_each_visible(|bullet| {
                 self.draw_body(&mut canvas, &bullet.body, 0.05, Color::CYAN);
             });
 
-            self.draw_body(&mut canvas, &player.body, 0.12, Color::WHITE);
             let circle = Mesh::new_circle(
                 ctx,
                 DrawMode::fill(),
@@ -469,37 +466,39 @@ impl ggez::event::EventHandler<GameError> for State {
                 10.,
                 0.1,
                 Color::from_rgba(255, 0, 0, 127),
-            )?;
+            )
+            .unwrap();
 
             canvas.draw(&circle, DrawParam::default());
-        }
+        });
 
-        if let Some(enemy) = &self.enemy {
-            enemy.spell.for_each_visible(|bullet| {
-                self.draw_body(&mut canvas, &bullet.body, 0.1, Color::RED);
-            });
-
+        self.enemies.iter().for_each(|enemy| {
             self.draw_body(&mut canvas, &enemy.body, 0.2, Color::BLACK);
+
+            enemy.spell.for_each_visible(|bullet| {
+                self.draw_body(&mut canvas, &bullet.body, 0.05, Color::RED);
+            });
 
             let healthbar = Mesh::new_rectangle(
                 ctx,
                 DrawMode::fill(),
                 Rect::new(0.0, 0.0, enemy.health.percentage() * 100., 10.0),
                 Color::from_rgba(255, 0, 0, 127),
-            )?;
+            )
+            .unwrap();
 
             canvas.draw(
                 &healthbar,
                 DrawParam::default().dest([enemy.x() - 50.0, enemy.y() - 90.0]),
             );
-        }
+        });
 
         self.particles.iter().for_each(|particle| {
             self.draw_body(&mut canvas, &particle.bullet.body, 0.05, Color::MAGENTA);
         });
 
         self.texts.iter().for_each(|text| {
-            canvas.draw(text, DrawParam::default().dest([win_w / 2.0, win_h / 2.0]));
+            canvas.draw(text, DrawParam::default().dest([win_w * 0.5, win_h * 0.5]));
         });
 
         canvas.finish(ctx)
