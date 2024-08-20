@@ -38,6 +38,17 @@ struct Player {
     spell: Spell,
 }
 
+struct Sprite {
+    image: Image,
+    color: Color,
+}
+
+type StoryLine = (Text, Sprite, Point2<f32>, std::time::Duration);
+
+struct Story {
+    lines: Vec<StoryLine>,
+}
+
 struct Timer {
     time: std::time::Duration,
     delay: f32,
@@ -54,11 +65,25 @@ struct Health {
     on_hit: fn(health: u32),
 }
 
+#[derive(PartialEq)]
+enum GameState {
+    // TODO: Menu,
+    Combat,
+    // TODO: Paused,
+    Cinematic,
+}
+
 struct State {
+    gamestate: GameState,
+    story: Story,
+
+    win_w: f32,
+    win_h: f32,
+
+    texts: Vec<Text>,
     players: Vec<Player>,
     enemies: Vec<Enemy>,
     particles: Vec<Particle>,
-    texts: Vec<Text>,
     background: Option<Image>,
 }
 
@@ -297,20 +322,43 @@ impl State {
             .get("background")
             .map(|background| load_image(ctx, &background.replace('"', "/")));
 
+        let (win_w, win_h) = ctx.gfx.size();
+
+        let story_line = |text: &str, sprite: Sprite, pos: [f32; 2], time: u32| -> StoryLine {
+            (
+                centered_text(text),
+                sprite,
+                pos.into(),
+                std::time::Duration::from_secs(time.into()),
+            )
+        };
+
+        let player_spr = Sprite {
+            image: load_image(ctx, PLAYER_IMG_PATH),
+            color: Color::WHITE,
+        };
+
+        let enemy_spr = Sprite {
+            image: load_image(ctx, ENEMY_IMG_PATH),
+            color: Color::BLACK,
+        };
+
+        let mut story_lines = vec![
+            story_line("The story begins...", player_spr, [0., 0.], 0),
+            story_line("I'm going to kill you!", enemy_spr, [-win_w * 0.7, 0.], 2),
+        ];
+        story_lines.reverse();
+
         Self {
+            gamestate: GameState::Cinematic,
+            win_w,
+            win_h,
             players,
             enemies,
             background,
             particles: vec![],
             texts: vec![],
-        }
-    }
-
-    fn if_press_move(&mut self, ctx: &Context, key: KeyCode, dir: (f32, f32)) {
-        if ctx.keyboard.is_key_pressed(key) {
-            self.players.iter_mut().for_each(|player| {
-                player.move_by(dir);
-            });
+            story: Story { lines: story_lines },
         }
     }
 
@@ -324,40 +372,22 @@ impl State {
                 .offset([0.5, 0.5]),
         );
     }
-}
 
-const PLAYER_IMG_PATH: &str = "/sakuya.png";
-const ENEMY_IMG_PATH: &str = "/sakuya.png";
-const BULLET_IMG_PATH: &str = "/isaac.png";
+    fn on_combat_update(&mut self, ctx: &mut Context) -> GameResult {
+        for key in [KeyCode::W, KeyCode::S, KeyCode::A, KeyCode::D] {
+            if ctx.keyboard.is_key_pressed(key) {
+                let dir = match key {
+                    KeyCode::W => DIR_UP,
+                    KeyCode::S => DIR_DOWN,
+                    KeyCode::A => DIR_LEFT,
+                    KeyCode::D => DIR_RIGHT,
+                    _ => return Ok(()),
+                };
 
-const DIR_UP: (f32, f32) = (0.0, -1.0);
-const DIR_DOWN: (f32, f32) = (0.0, 1.0);
-const DIR_LEFT: (f32, f32) = (-1.0, 0.0);
-const DIR_RIGHT: (f32, f32) = (1.0, 0.0);
-
-fn centered_text(text: &str) -> Text {
-    Text::new(TextFragment {
-        text: text.to_owned(),
-        scale: Some(PxScale::from(40.0)),
-        ..Default::default()
-    })
-    .set_layout(TextLayout {
-        h_align: TextAlign::Middle,
-        v_align: TextAlign::Middle,
-    })
-    .to_owned()
-}
-
-impl ggez::event::EventHandler<GameError> for State {
-    fn update(&mut self, ctx: &mut Context) -> GameResult {
-        self.if_press_move(&ctx, KeyCode::W, DIR_UP);
-        self.if_press_move(&ctx, KeyCode::S, DIR_DOWN);
-        self.if_press_move(&ctx, KeyCode::A, DIR_LEFT);
-        self.if_press_move(&ctx, KeyCode::D, DIR_RIGHT);
-
-        if ctx.keyboard.is_key_just_pressed(KeyCode::R) {
-            println!("Game Restarted!");
-            *self = State::new(&ctx);
+                self.players
+                    .iter_mut()
+                    .for_each(|player| player.move_by(dir));
+            }
         }
 
         let mut enemy_death = false;
@@ -439,16 +469,82 @@ impl ggez::event::EventHandler<GameError> for State {
 
         Ok(())
     }
+}
+
+const PLAYER_IMG_PATH: &str = "/sakuya.png";
+const ENEMY_IMG_PATH: &str = "/sakuya.png";
+const BULLET_IMG_PATH: &str = "/isaac.png";
+
+const DIR_UP: (f32, f32) = (0.0, -1.0);
+const DIR_DOWN: (f32, f32) = (0.0, 1.0);
+const DIR_LEFT: (f32, f32) = (-1.0, 0.0);
+const DIR_RIGHT: (f32, f32) = (1.0, 0.0);
+
+fn centered_text(text: &str) -> Text {
+    Text::new(TextFragment {
+        text: text.to_owned(),
+        scale: Some(PxScale::from(40.0)),
+        ..Default::default()
+    })
+    .set_layout(TextLayout {
+        h_align: TextAlign::Middle,
+        v_align: TextAlign::Middle,
+    })
+    .to_owned()
+}
+
+impl ggez::event::EventHandler<GameError> for State {
+    fn resize_event(
+        &mut self,
+        _ctx: &mut Context,
+        _width: f32,
+        _height: f32,
+    ) -> Result<(), GameError> {
+        self.win_w = _width;
+        self.win_h = _height;
+        Ok(())
+    }
+
+    fn key_down_event(
+        &mut self,
+        ctx: &mut Context,
+        input: input::keyboard::KeyInput,
+        _repeated: bool,
+    ) -> Result<(), GameError> {
+        match input.keycode {
+            Some(KeyCode::Return) if !_repeated && self.gamestate == GameState::Cinematic => {
+                if let Some(_line) = self.story.lines.pop() {
+                    if self.story.lines.is_empty() {
+                        self.gamestate = GameState::Combat;
+                    }
+                }
+            }
+            Some(KeyCode::Escape) if !_repeated => ctx.request_quit(),
+            Some(KeyCode::R) if !_repeated => {
+                println!("Game Restarted!");
+                *self = State::new(&ctx);
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn update(&mut self, ctx: &mut Context) -> GameResult {
+        match self.gamestate {
+            GameState::Combat => self.on_combat_update(ctx),
+            _ => Ok(()),
+        }
+    }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
-        let (win_w, win_h) = ctx.gfx.size();
 
         if let Some(background) = &self.background {
             let (w, h) = (background.width() as f32, background.height() as f32);
             canvas.draw(
                 background,
-                DrawParam::default().scale([win_w / w, win_h / h]),
+                DrawParam::default().scale([self.win_w / w, self.win_h / h]),
             );
         }
 
@@ -498,8 +594,27 @@ impl ggez::event::EventHandler<GameError> for State {
         });
 
         self.texts.iter().for_each(|text| {
-            canvas.draw(text, DrawParam::default().dest([win_w * 0.5, win_h * 0.5]));
+            canvas.draw(
+                text,
+                DrawParam::default().dest([self.win_w * 0.5, self.win_h * 0.5]),
+            );
         });
+
+        if let Some((text, Sprite { image, color }, Point2 { x, y }, _)) =
+            self.story.lines.last()
+        {
+            canvas.draw(
+                text,
+                DrawParam::default().dest([self.win_w * 0.5, self.win_h * 0.5]),
+            );
+
+            canvas.draw(
+                image,
+                DrawParam::default()
+                    .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
+                    .color(*color),
+            );
+        }
 
         canvas.finish(ctx)
     }
