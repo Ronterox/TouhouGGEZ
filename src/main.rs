@@ -1,6 +1,9 @@
 mod physics;
 
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{HashMap, VecDeque},
+    str::FromStr,
+};
 
 use ggez::{graphics::*, input::keyboard::KeyCode, *};
 use mint::Point2;
@@ -67,14 +70,16 @@ struct Health {
 
 #[derive(PartialEq)]
 enum GameState {
-    // TODO: Menu,
     Combat,
-    // TODO: Paused,
+    Paused,
     Cinematic,
 }
 
+type UIText = (Text, Point2<f32>);
+
 struct State {
     gamestate: GameState,
+    pause_menu: VecDeque<UIText>,
     story: Story,
 
     win_w: f32,
@@ -351,14 +356,23 @@ impl State {
 
         Self {
             gamestate: GameState::Cinematic,
+            story: Story { lines: story_lines },
+
+            pause_menu: vec![
+                (centered_text("Resume"), Point2 { x: 0., y: 0. }),
+                (centered_text("Quit"), Point2 { x: 0., y: 100. }),
+            ]
+            .into(),
+
             win_w,
             win_h,
+
             players,
             enemies,
             background,
+
             particles: vec![],
             texts: vec![],
-            story: Story { lines: story_lines },
         }
     }
 
@@ -519,10 +533,31 @@ impl ggez::event::EventHandler<GameError> for State {
                     }
                 }
             }
-            Some(KeyCode::Escape) if !_repeated => ctx.request_quit(),
+            Some(KeyCode::Return) if !_repeated && self.gamestate == GameState::Paused => {
+                if let Some((text, _)) = self.pause_menu.front() {
+                    if let Some(fragment) = text.fragments().first() {
+                        if fragment.text == "Resume" {
+                            self.gamestate = GameState::Cinematic;
+                        } else if fragment.text == "Quit" {
+                            ctx.request_quit();
+                        }
+                    }
+                }
+            }
+            Some(KeyCode::Escape) if !_repeated => {
+                self.gamestate = GameState::Paused;
+            }
+            Some(KeyCode::Q) if !_repeated => ctx.request_quit(),
             Some(KeyCode::R) if !_repeated => {
                 println!("Game Restarted!");
                 *self = State::new(&ctx);
+            }
+            Some(key) if self.gamestate == GameState::Paused => {
+                if key == KeyCode::Down {
+                    if let Some(elem) = self.pause_menu.pop_front() {
+                        self.pause_menu.push_back(elem);
+                    }
+                }
             }
             _ => {}
         }
@@ -600,9 +635,7 @@ impl ggez::event::EventHandler<GameError> for State {
             );
         });
 
-        if let Some((text, Sprite { image, color }, Point2 { x, y }, _)) =
-            self.story.lines.last()
-        {
+        if let Some((text, Sprite { image, color }, Point2 { x, y }, _)) = self.story.lines.last() {
             canvas.draw(
                 text,
                 DrawParam::default().dest([self.win_w * 0.5, self.win_h * 0.5]),
@@ -614,6 +647,38 @@ impl ggez::event::EventHandler<GameError> for State {
                     .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
                     .color(*color),
             );
+        }
+
+        // TODO: limited pauses, with breaking effect after unpausing
+        if self.gamestate == GameState::Paused {
+            let transparent_rect = Mesh::new_rectangle(
+                ctx,
+                DrawMode::fill(),
+                Rect::new(0.0, 0.0, self.win_w, self.win_h),
+                Color::from_rgba(0, 0, 0, 127),
+            )?;
+            canvas.draw(&transparent_rect, DrawParam::default());
+
+            if let Some((text, Point2 { x, y })) = self.pause_menu.front() {
+                canvas.draw(
+                    text,
+                    DrawParam::default()
+                        .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
+                        .color(Color::YELLOW),
+                )
+            }
+
+            self.pause_menu
+                .iter()
+                .skip(1)
+                .for_each(|(text, Point2 { x, y })| {
+                    canvas.draw(
+                        text,
+                        DrawParam::default()
+                            .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
+                            .color(Color::WHITE),
+                    )
+                });
         }
 
         canvas.finish(ctx)
