@@ -75,11 +75,17 @@ enum GameState {
     Cinematic,
 }
 
-type UIText = (Text, Point2<f32>);
+struct UISelectable<T: Drawable> {
+    img: T,
+    pos: Point2<f32>,
+    color: Color,
+    select_color: Color,
+    action: fn(&mut Context, &mut State),
+}
 
 struct State {
     gamestate: GameState,
-    pause_menu: VecDeque<UIText>,
+    pause_menu: VecDeque<UISelectable<Text>>,
     story: Story,
 
     win_w: f32,
@@ -359,8 +365,33 @@ impl State {
             story: Story { lines: story_lines },
 
             pause_menu: vec![
-                (centered_text("Resume"), Point2 { x: 0., y: 0. }),
-                (centered_text("Quit"), Point2 { x: 0., y: 100. }),
+                UISelectable {
+                    img: centered_text("Resume"),
+                    pos: Point2 { x: 0., y: -100. },
+                    color: Color::WHITE,
+                    select_color: Color::YELLOW,
+                    action: |_, state| {
+                        state.gamestate = if state.story.lines.is_empty() {
+                            GameState::Combat
+                        } else {
+                            GameState::Cinematic
+                        };
+                    },
+                },
+                UISelectable {
+                    img: centered_text("Reset"),
+                    pos: Point2 { x: 0., y: 0. },
+                    color: Color::WHITE,
+                    select_color: Color::YELLOW,
+                    action: |ctx, state| state.restart(ctx),
+                },
+                UISelectable {
+                    img: centered_text("Quit"),
+                    pos: Point2 { x: 0., y: 100. },
+                    color: Color::WHITE,
+                    select_color: Color::RED,
+                    action: |ctx, _| ctx.request_quit(),
+                },
             ]
             .into(),
 
@@ -449,15 +480,18 @@ impl State {
             player.spell.spawn(&ctx, &player.body.position());
         });
 
+        let mut gen_particles = |x: f32, y: f32| {
+            for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
+                self.particles
+                    .push(Particle::new(ctx, 2.0, [x, y], 5.0, dir));
+            }
+        };
+
         if player_death {
             self.players.retain(|player| {
                 let is_alive = player.health.is_alive();
                 if !is_alive {
-                    let start_pos = [player.x(), player.y()];
-                    for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
-                        self.particles
-                            .push(Particle::new(ctx, 2.0, start_pos, 5.0, dir));
-                    }
+                    gen_particles(player.x(), player.y());
                 }
                 is_alive
             });
@@ -469,7 +503,14 @@ impl State {
         }
 
         if enemy_death {
-            self.enemies.retain(|enemy| enemy.health.is_alive());
+            self.enemies.retain(|enemy| {
+                let is_alive = enemy.health.is_alive();
+                if !is_alive {
+                    gen_particles(enemy.x(), enemy.y());
+                }
+                is_alive
+            });
+
             if self.enemies.is_empty() {
                 self.texts
                     .push(centered_text("You win! Press R to restart."));
@@ -482,6 +523,11 @@ impl State {
         });
 
         Ok(())
+    }
+
+    fn restart(&mut self, ctx: &mut Context) {
+        println!("Game Restarted!");
+        *self = Self::new(ctx);
     }
 }
 
@@ -508,14 +554,9 @@ fn centered_text(text: &str) -> Text {
 }
 
 impl ggez::event::EventHandler<GameError> for State {
-    fn resize_event(
-        &mut self,
-        _ctx: &mut Context,
-        _width: f32,
-        _height: f32,
-    ) -> Result<(), GameError> {
-        self.win_w = _width;
-        self.win_h = _height;
+    fn resize_event(&mut self, _ctx: &mut Context, w: f32, h: f32) -> Result<(), GameError> {
+        self.win_w = w;
+        self.win_h = h;
         Ok(())
     }
 
@@ -527,38 +568,35 @@ impl ggez::event::EventHandler<GameError> for State {
     ) -> Result<(), GameError> {
         match input.keycode {
             Some(KeyCode::Return) if !_repeated && self.gamestate == GameState::Cinematic => {
-                if let Some(_line) = self.story.lines.pop() {
-                    if self.story.lines.is_empty() {
-                        self.gamestate = GameState::Combat;
-                    }
+                self.story.lines.pop();
+                if self.story.lines.is_empty() {
+                    self.gamestate = GameState::Combat;
                 }
             }
             Some(KeyCode::Return) if !_repeated && self.gamestate == GameState::Paused => {
-                if let Some((text, _)) = self.pause_menu.front() {
-                    if let Some(fragment) = text.fragments().first() {
-                        if fragment.text == "Resume" {
-                            self.gamestate = GameState::Cinematic;
-                        } else if fragment.text == "Quit" {
-                            ctx.request_quit();
-                        }
-                    }
+                if let Some(elem) = self.pause_menu.front() {
+                    (elem.action)(ctx, self);
                 }
             }
             Some(KeyCode::Escape) if !_repeated => {
                 self.gamestate = GameState::Paused;
             }
-            Some(KeyCode::Q) if !_repeated => ctx.request_quit(),
             Some(KeyCode::R) if !_repeated => {
-                println!("Game Restarted!");
-                *self = State::new(&ctx);
+                self.restart(ctx);
             }
-            Some(key) if self.gamestate == GameState::Paused => {
-                if key == KeyCode::Down {
+            Some(key) if self.gamestate == GameState::Paused => match key {
+                KeyCode::Down | KeyCode::Right | KeyCode::S | KeyCode::D => {
                     if let Some(elem) = self.pause_menu.pop_front() {
                         self.pause_menu.push_back(elem);
                     }
                 }
-            }
+                KeyCode::Up | KeyCode::Left | KeyCode::W | KeyCode::A => {
+                    if let Some(elem) = self.pause_menu.pop_back() {
+                        self.pause_menu.push_front(elem);
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         }
 
@@ -651,34 +689,33 @@ impl ggez::event::EventHandler<GameError> for State {
 
         // TODO: limited pauses, with breaking effect after unpausing
         if self.gamestate == GameState::Paused {
-            let transparent_rect = Mesh::new_rectangle(
+            let background = Mesh::new_rectangle(
                 ctx,
                 DrawMode::fill(),
                 Rect::new(0.0, 0.0, self.win_w, self.win_h),
                 Color::from_rgba(0, 0, 0, 127),
             )?;
-            canvas.draw(&transparent_rect, DrawParam::default());
+            canvas.draw(&background, DrawParam::default());
 
-            if let Some((text, Point2 { x, y })) = self.pause_menu.front() {
+            if let Some(elem) = self.pause_menu.front() {
+                let Point2 { x, y } = elem.pos;
                 canvas.draw(
-                    text,
+                    &elem.img,
                     DrawParam::default()
                         .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
-                        .color(Color::YELLOW),
+                        .color(elem.select_color),
                 )
             }
 
-            self.pause_menu
-                .iter()
-                .skip(1)
-                .for_each(|(text, Point2 { x, y })| {
-                    canvas.draw(
-                        text,
-                        DrawParam::default()
-                            .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
-                            .color(Color::WHITE),
-                    )
-                });
+            self.pause_menu.iter().skip(1).for_each(|elem| {
+                let Point2 { x, y } = elem.pos;
+                canvas.draw(
+                    &elem.img,
+                    DrawParam::default()
+                        .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
+                        .color(elem.color),
+                )
+            });
         }
 
         canvas.finish(ctx)
