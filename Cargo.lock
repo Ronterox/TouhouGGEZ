@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "ggez",
  "touhoulang",
+ "touhoulang_macro",
 ]
 
 [[package]]
@@ -2418,7 +2419,16 @@ dependencies = [
 
 [[package]]
 name = "touhoulang"
+version = "0.1.1"
+
+[[package]]
+name = "touhoulang_macro"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "touhoulang",
+]
 
 [[package]]
 name = "ttf-parser"

@@ -1,13 +1,12 @@
 mod physics;
 
-use std::{
-    collections::{HashMap, VecDeque},
-    str::FromStr,
-};
-
 use ggez::{graphics::*, input::keyboard::KeyCode, *};
 use mint::Point2;
 use physics::{Movable, Rigidbody};
+use std::collections::VecDeque;
+
+use touhoulang::*;
+use touhoulang_macro::Evaluate;
 
 #[derive(Clone)]
 struct Body {
@@ -225,7 +224,7 @@ impl Player {
                 max_health: health,
                 on_hit: |_| {},
             },
-            body: Body::new(10.0, [350.0, 350.0], ctx, PLAYER_IMG_PATH),
+            body: Body::new(5.0, [350.0, 350.0], ctx, PLAYER_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.1),
         }
     }
@@ -293,45 +292,82 @@ impl Movable for Enemy {
     }
 }
 
+#[derive(Evaluate, Default)]
+struct Globals {
+    background: String,
+}
+
+#[derive(Evaluate, Default)]
+struct Bull {
+    amount: usize,
+    speed: f32,
+}
+
+#[derive(Evaluate, Default)]
+struct Sakuya {
+    bullet: Bull,
+    health: u32,
+}
+
+#[derive(Evaluate, Default)]
+struct Reimu {
+    bullet: Bull,
+    health: u32,
+    speed: f32,
+}
+
 impl State {
     fn new(ctx: &Context) -> Self {
-        let (vars, _) = touhoulang::parse_text(&std::fs::read_to_string("script.touhou").unwrap());
-        dbg!(&vars);
-
+        let script_text = std::fs::read_to_string("script.th").unwrap();
+        let values = parser::parse(tokenizer::tokenize(&script_text));
         let bullet = |speed: f32, direction: (f32, f32)| Bullet::new(ctx, speed, direction);
 
         let mut players = vec![];
-        let player = vars.get("player").map(|player| {
-            Player::new(
-                ctx,
-                vars_parse(&vars, player, "health", 1),
-                bullet(vars_parse(&vars, player, "bullet.speed", 20.), DIR_UP),
-                vars_parse(&vars, player, "bullets", 8),
-            )
-        });
+        if let Some(_) = values.get("sakuya") {
+            let mut sakuya = Sakuya {
+                health: 1,
+                bullet: Bull {
+                    amount: 8,
+                    speed: 2.0,
+                },
+            };
+            sakuya.evaluate(values.clone());
 
-        if let Some(player) = player {
-            players.push(player);
+            players.push(Player::new(
+                ctx,
+                sakuya.health,
+                bullet(sakuya.bullet.speed, DIR_UP),
+                sakuya.bullet.amount,
+            ));
         }
 
         let mut enemies = vec![];
-        let enemy = vars.get("enemy").map(|enemy| {
-            Enemy::new(
-                ctx,
-                vars_parse(&vars, enemy, "health", 200),
-                vars_parse(&vars, enemy, "speed", 4.0),
-                bullet(vars_parse(&vars, enemy, "bullet.speed", 5.), DIR_DOWN),
-                vars_parse(&vars, enemy, "bullets", 5),
-            )
-        });
+        if let Some(_) = values.get("reimu") {
+            let mut reimu = Reimu {
+                health: 200,
+                speed: 2.0,
+                bullet: Bull {
+                    amount: 5,
+                    speed: 5.0,
+                },
+            };
+            reimu.evaluate(values.clone());
 
-        if let Some(enemy) = enemy {
-            enemies.push(enemy);
+            enemies.push(Enemy::new(
+                ctx,
+                reimu.health,
+                reimu.speed,
+                bullet(reimu.bullet.speed, DIR_DOWN),
+                reimu.bullet.amount,
+            ));
         }
 
-        let background = vars
+        let mut globals = Globals::default();
+        globals.evaluate(values.clone());
+
+        let background = values
             .get("background")
-            .map(|background| load_image(ctx, &background.replace('"', "/")));
+            .map(|_| load_image(ctx, format!("/{}/", globals.background).as_str()));
 
         let (win_w, win_h) = ctx.gfx.size();
 
@@ -567,13 +603,13 @@ impl ggez::event::EventHandler<GameError> for State {
         _repeated: bool,
     ) -> Result<(), GameError> {
         match input.keycode {
-            Some(KeyCode::Return) if !_repeated && self.gamestate == GameState::Cinematic => {
+            Some(KeyCode::Return) | Some(KeyCode::Space) if !_repeated && self.gamestate == GameState::Cinematic => {
                 self.story.lines.pop();
                 if self.story.lines.is_empty() {
                     self.gamestate = GameState::Combat;
                 }
             }
-            Some(KeyCode::Return) if !_repeated && self.gamestate == GameState::Paused => {
+            Some(KeyCode::Return) | Some(KeyCode::Space) if !_repeated && self.gamestate == GameState::Paused => {
                 if let Some(elem) = self.pause_menu.front() {
                     (elem.action)(ctx, self);
                 }
@@ -720,17 +756,6 @@ impl ggez::event::EventHandler<GameError> for State {
 
         canvas.finish(ctx)
     }
-}
-
-fn vars_parse<T: FromStr + Default>(
-    vars: &HashMap<String, String>,
-    key: &str,
-    params: &str,
-    default: T,
-) -> T {
-    vars.get(format!("{key}.{params}").as_str())
-        .map(|x| x.parse().unwrap_or_default())
-        .unwrap_or(default)
 }
 
 fn load_image(ctx: &Context, path: &str) -> Image {
