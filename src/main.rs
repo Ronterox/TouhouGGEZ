@@ -89,12 +89,12 @@ struct State {
 
     win_w: f32,
     win_h: f32,
+    background: Option<Image>,
 
     texts: Vec<Text>,
     players: Vec<Player>,
     enemies: Vec<Enemy>,
     particles: Vec<Particle>,
-    background: Option<Image>,
 }
 
 trait Distance {
@@ -123,11 +123,9 @@ impl Particle {
 }
 
 impl Health {
-    fn take_damage(&mut self, damage: u32) -> bool {
+    fn take_damage(&mut self, damage: u32) {
         self.health = self.health.saturating_sub(damage);
         (self.on_hit)(self.health);
-
-        self.health == 0
     }
 
     fn is_alive(&self) -> bool {
@@ -316,6 +314,52 @@ struct Reimu {
     speed: f32,
 }
 
+macro_rules! check_game_finish {
+    ($self:ident, $ctx: ident, $targets:ident, $death:ident, $text:literal) => {
+        if $death {
+            $self.$targets.retain(|t| {
+                let is_alive = t.health.is_alive();
+                if !is_alive {
+                    let (x, y) = (t.x(), t.y());
+                    for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
+                        $self
+                            .particles
+                            .push(Particle::new($ctx, 2.0, [x, y], 5.0, dir));
+                    }
+                }
+                is_alive
+            });
+
+            if $self.$targets.is_empty() {
+                $self.texts.push(centered_text($text));
+            }
+        }
+    };
+}
+
+macro_rules! bullet_hit {
+    ($targets:expr, $bullet:ident, $hitbox:literal) => {
+        $targets.iter_mut().for_each(|t| {
+            if $bullet.collided(t.position(), $hitbox) {
+                t.health.take_damage(1);
+                $bullet.is_visible = false;
+            }
+        });
+    };
+}
+
+macro_rules! bullets_hit {
+    ($shooter:expr, $targets:expr, $hitbox:literal) => {
+        $shooter.spell.for_each_visible_mut(|bullet| {
+            bullet.update();
+            bullet_hit!($targets, bullet, $hitbox);
+            if bullet.body.y() < 0.0 {
+                bullet.is_visible = false;
+            }
+        });
+    };
+}
+
 impl State {
     fn new(ctx: &Context) -> Self {
         let script_text = std::fs::read_to_string("script.th").unwrap();
@@ -471,87 +515,35 @@ impl State {
             }
         }
 
-        let mut enemy_death = false;
-        let mut player_death = false;
-
         self.enemies.iter_mut().for_each(|enemy| {
             enemy.move_auto(&ctx);
-
-            enemy.spell.for_each_visible_mut(|bullet| {
-                bullet.update();
-
-                let mut hit_player = false;
-                self.players.iter_mut().for_each(|player| {
-                    if bullet.collided(player.position(), 25.) {
-                        player_death = player.health.take_damage(1);
-                        hit_player = true;
-                    }
-                });
-
-                if bullet.body.y() > 800.0 || hit_player {
-                    bullet.is_visible = false;
-                }
-            });
-
+            bullets_hit!(enemy, self.players, 25.);
             enemy.spell.spawn(&ctx, &enemy.body.position());
         });
 
         self.players.iter_mut().for_each(|player| {
-            player.spell.for_each_visible_mut(|bullet| {
-                bullet.update();
-
-                let mut hit_enemy = false;
-                self.enemies.iter_mut().for_each(|enemy| {
-                    if bullet.collided(enemy.position(), 100.) {
-                        enemy_death = enemy.health.take_damage(1);
-                        hit_enemy = true;
-                    }
-                });
-
-                if bullet.body.y() < 0.0 || hit_enemy {
-                    bullet.is_visible = false;
-                }
-            });
-
+            bullets_hit!(player, self.enemies, 100.);
             player.spell.spawn(&ctx, &player.body.position());
         });
 
-        let mut gen_particles = |x: f32, y: f32| {
-            for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
-                self.particles
-                    .push(Particle::new(ctx, 2.0, [x, y], 5.0, dir));
-            }
-        };
+        let player_death = self.players.iter().any(|p| !p.health.is_alive());
+        let enemy_death = self.enemies.iter().any(|e| !e.health.is_alive());
 
-        if player_death {
-            self.players.retain(|player| {
-                let is_alive = player.health.is_alive();
-                if !is_alive {
-                    gen_particles(player.x(), player.y());
-                }
-                is_alive
-            });
+        check_game_finish!(
+            self,
+            ctx,
+            players,
+            player_death,
+            "You died! Press R to restart."
+        );
 
-            if self.players.is_empty() {
-                self.texts
-                    .push(centered_text("You died! Press R to restart."));
-            }
-        }
-
-        if enemy_death {
-            self.enemies.retain(|enemy| {
-                let is_alive = enemy.health.is_alive();
-                if !is_alive {
-                    gen_particles(enemy.x(), enemy.y());
-                }
-                is_alive
-            });
-
-            if self.enemies.is_empty() {
-                self.texts
-                    .push(centered_text("You win! Press R to restart."));
-            }
-        }
+        check_game_finish!(
+            self,
+            ctx,
+            enemies,
+            enemy_death,
+            "You win! Press R to restart."
+        );
 
         self.particles.retain_mut(|particle| {
             particle.update(ctx);
@@ -589,6 +581,27 @@ fn centered_text(text: &str) -> Text {
     .to_owned()
 }
 
+macro_rules! rect {
+    ($ctx:ident, $w:expr, $h:expr, ($r:literal, $g:literal, $b:literal, $a:literal)) => {
+        Mesh::new_rectangle(
+            $ctx,
+            DrawMode::fill(),
+            Rect::new(0.0, 0.0, $w, $h),
+            Color::from_rgba($r, $g, $b, $a),
+        )
+        .unwrap()
+    };
+}
+
+macro_rules! draw_at {
+    ($canvas:ident, $ref:expr, ($x:expr, $y:expr)) => {
+        $canvas.draw($ref, DrawParam::default().dest([$x, $y]))
+    };
+    ($canvas:ident, $ref:expr, ($x:expr, $y:expr), $color: expr) => {
+        $canvas.draw($ref, DrawParam::default().dest([$x, $y]).color($color))
+    };
+}
+
 impl ggez::event::EventHandler<GameError> for State {
     fn resize_event(&mut self, _ctx: &mut Context, w: f32, h: f32) -> Result<(), GameError> {
         self.win_w = w;
@@ -603,17 +616,20 @@ impl ggez::event::EventHandler<GameError> for State {
         _repeated: bool,
     ) -> Result<(), GameError> {
         match input.keycode {
-            Some(KeyCode::Return) | Some(KeyCode::Space) if !_repeated && self.gamestate == GameState::Cinematic => {
-                self.story.lines.pop();
-                if self.story.lines.is_empty() {
-                    self.gamestate = GameState::Combat;
+            Some(KeyCode::Return) | Some(KeyCode::Space) if !_repeated => match self.gamestate {
+                GameState::Cinematic => {
+                    self.story.lines.pop();
+                    if self.story.lines.is_empty() {
+                        self.gamestate = GameState::Combat;
+                    }
                 }
-            }
-            Some(KeyCode::Return) | Some(KeyCode::Space) if !_repeated && self.gamestate == GameState::Paused => {
-                if let Some(elem) = self.pause_menu.front() {
-                    (elem.action)(ctx, self);
+                GameState::Paused => {
+                    if let Some(elem) = self.pause_menu.front() {
+                        (elem.action)(ctx, self);
+                    }
                 }
-            }
+                _ => {}
+            },
             Some(KeyCode::Escape) if !_repeated => {
                 self.gamestate = GameState::Paused;
             }
@@ -674,7 +690,7 @@ impl ggez::event::EventHandler<GameError> for State {
             )
             .unwrap();
 
-            canvas.draw(&circle, DrawParam::default());
+            draw_at!(canvas, &circle, (0.0, 0.0))
         });
 
         self.enemies.iter().for_each(|enemy| {
@@ -684,73 +700,52 @@ impl ggez::event::EventHandler<GameError> for State {
                 self.draw_body(&mut canvas, &bullet.body, 0.05, Color::RED);
             });
 
-            let healthbar = Mesh::new_rectangle(
+            let healthbar = rect!(
                 ctx,
-                DrawMode::fill(),
-                Rect::new(0.0, 0.0, enemy.health.percentage() * 100., 10.0),
-                Color::from_rgba(255, 0, 0, 127),
-            )
-            .unwrap();
-
-            canvas.draw(
-                &healthbar,
-                DrawParam::default().dest([enemy.x() - 50.0, enemy.y() - 90.0]),
+                enemy.health.percentage() * 100.,
+                10.0,
+                (255, 0, 0, 127)
             );
+
+            draw_at!(canvas, &healthbar, (enemy.x() - 50.0, enemy.y() - 90.0));
         });
 
         self.particles.iter().for_each(|particle| {
             self.draw_body(&mut canvas, &particle.bullet.body, 0.05, Color::MAGENTA);
         });
 
-        self.texts.iter().for_each(|text| {
-            canvas.draw(
-                text,
-                DrawParam::default().dest([self.win_w * 0.5, self.win_h * 0.5]),
-            );
-        });
+        self.texts
+            .iter()
+            .for_each(|text| draw_at!(canvas, text, (self.win_w * 0.5, self.win_h * 0.5)));
 
-        if let Some((text, Sprite { image, color }, Point2 { x, y }, _)) = self.story.lines.last() {
-            canvas.draw(
-                text,
-                DrawParam::default().dest([self.win_w * 0.5, self.win_h * 0.5]),
-            );
-
-            canvas.draw(
-                image,
-                DrawParam::default()
-                    .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
-                    .color(*color),
-            );
+        if let Some((text, Sprite { image, color }, _, _)) = self.story.lines.last() {
+            draw_at!(canvas, text, (self.win_w * 0.5, self.win_h * 0.5));
+            draw_at!(canvas, image, (self.win_w * 0.5, self.win_h * 0.5), *color);
         }
 
         // TODO: limited pauses, with breaking effect after unpausing
         if self.gamestate == GameState::Paused {
-            let background = Mesh::new_rectangle(
-                ctx,
-                DrawMode::fill(),
-                Rect::new(0.0, 0.0, self.win_w, self.win_h),
-                Color::from_rgba(0, 0, 0, 127),
-            )?;
-            canvas.draw(&background, DrawParam::default());
+            let background = rect!(ctx, self.win_w, self.win_h, (0, 0, 0, 127));
+            draw_at!(canvas, &background, (0.0, 0.0));
 
             if let Some(elem) = self.pause_menu.front() {
                 let Point2 { x, y } = elem.pos;
-                canvas.draw(
+                draw_at!(
+                    canvas,
                     &elem.img,
-                    DrawParam::default()
-                        .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
-                        .color(elem.select_color),
-                )
+                    (self.win_w * 0.5 + x, self.win_h * 0.5 + y),
+                    elem.select_color
+                );
             }
 
             self.pause_menu.iter().skip(1).for_each(|elem| {
                 let Point2 { x, y } = elem.pos;
-                canvas.draw(
+                draw_at!(
+                    canvas,
                     &elem.img,
-                    DrawParam::default()
-                        .dest([self.win_w * 0.5 + x, self.win_h * 0.5 + y])
-                        .color(elem.color),
-                )
+                    (self.win_w * 0.5 + x, self.win_h * 0.5 + y),
+                    elem.color
+                );
             });
         }
 
