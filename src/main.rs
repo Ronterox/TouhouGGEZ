@@ -14,22 +14,22 @@ struct Body {
     sprite: Image,
 }
 
+struct Spell {
+    bullets: Vec<Bullet>,
+    shot_timer: Timer,
+}
+
 #[derive(Clone)]
 struct Bullet {
     body: Body,
     is_visible: bool,
-    direction: (f32, f32),
-}
-
-struct Spell {
-    bullets: Vec<Bullet>,
-    shot_timer: Timer,
 }
 
 struct Enemy {
     health: Health,
     body: Body,
     spell: Spell,
+
     move_timer: Timer,
     directions: Vec<f32>,
 }
@@ -45,15 +45,15 @@ struct Sprite {
     color: Color,
 }
 
-type StoryLine = (Text, Sprite, Point2<f32>, std::time::Duration);
-
-struct Story {
-    lines: Vec<StoryLine>,
-}
-
 struct Timer {
     time: std::time::Duration,
     delay: f32,
+}
+
+struct StoryLine {
+    text: Text,
+    sprite: Sprite,
+    pos: Point2<f32>,
 }
 
 struct Particle {
@@ -82,13 +82,17 @@ struct UISelectable<T: Drawable> {
     action: fn(&mut Context, &mut State),
 }
 
+struct Screen {
+    width: f32,
+    height: f32,
+}
+
 struct State {
-    gamestate: GameState,
     pause_menu: VecDeque<UISelectable<Text>>,
+    gamestate: GameState,
     story: Story,
 
-    win_w: f32,
-    win_h: f32,
+    screen: Screen,
     background: Option<Image>,
 
     texts: Vec<Text>,
@@ -97,13 +101,11 @@ struct State {
     particles: Vec<Particle>,
 }
 
-trait Distance {
-    fn distance(&self, other: &Self) -> f32;
-}
+type Story = Vec<StoryLine>;
 
 impl Particle {
-    fn new(ctx: &Context, ttl: f32, position: [f32; 2], speed: f32, direction: (f32, f32)) -> Self {
-        let mut bullet = Bullet::new(ctx, speed, direction);
+    fn new(ctx: &Context, ttl: f32, position: [f32; 2], velocity: [f32; 2]) -> Self {
+        let mut bullet = Bullet::new(ctx, velocity);
         bullet.body.set_position(position[0], position[1]);
         bullet.is_visible = true;
 
@@ -117,7 +119,7 @@ impl Particle {
         if self.timer.ready(ctx) {
             self.bullet.is_visible = false;
         } else {
-            self.bullet.body.move_by(self.bullet.direction);
+            self.bullet.body.move_by(*self.bullet.body.velocity());
         }
     }
 }
@@ -185,11 +187,11 @@ impl Timer {
 }
 
 impl Body {
-    fn new(speed: f32, position: [f32; 2], ctx: &Context, image_path: &str) -> Self {
+    fn new(velocity: [f32; 2], position: [f32; 2], ctx: &Context, image_path: &str) -> Self {
         Self {
             rigidbody: Rigidbody {
                 position: Point2::from(position),
-                speed,
+                velocity: velocity.into(),
             },
             sprite: load_image(ctx, image_path),
         }
@@ -197,16 +199,15 @@ impl Body {
 }
 
 impl Bullet {
-    fn new(ctx: &Context, speed: f32, direction: (f32, f32)) -> Self {
+    fn new(ctx: &Context, velocity: [f32; 2]) -> Self {
         Self {
-            body: Body::new(speed, [0.0, 0.0], ctx, BULLET_IMG_PATH),
+            body: Body::new(velocity, [0.0, 0.0], ctx, BULLET_IMG_PATH),
             is_visible: false,
-            direction,
         }
     }
 
     fn update(&mut self) {
-        self.body.move_by(self.direction);
+        self.body.move_by(*self.body.velocity());
     }
 
     fn collided(&self, _other: &Point2<f32>, hitbox_size: f32) -> bool {
@@ -222,7 +223,7 @@ impl Player {
                 max_health: health,
                 on_hit: |_| {},
             },
-            body: Body::new(5.0, [350.0, 350.0], ctx, PLAYER_IMG_PATH),
+            body: Body::new([5.0, 5.0], [350.0, 350.0], ctx, PLAYER_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.1),
         }
     }
@@ -236,7 +237,7 @@ impl Enemy {
                 max_health: health,
                 on_hit: |hp| println!("Enemy Health: {hp}"),
             },
-            body: Body::new(speed, [350.0, 100.0], ctx, ENEMY_IMG_PATH),
+            body: Body::new([speed, 0.0], [350.0, 100.0], ctx, ENEMY_IMG_PATH),
             spell: Spell::new(bullet, bullets_size, 0.5),
             directions: vec![-1., 0., 1., 0., 1., 0., -1., 0.],
             move_timer: Timer::new(1.5),
@@ -249,8 +250,24 @@ impl Enemy {
         }
 
         let vel = self.directions.first().unwrap_or(&0.0);
-        self.body.move_by((*vel, 0.0));
+        let speed = self.body.speed();
+
+        self.body.move_by([speed * vel, 0.0].into());
     }
+}
+
+impl StoryLine {
+    fn new(text: &str, sprite: Sprite, pos: [f32; 2]) -> Self {
+        Self {
+            text: centered_text(text),
+            sprite,
+            pos: pos.into(),
+        }
+    }
+}
+
+trait Distance {
+    fn distance(&self, other: &Self) -> f32;
 }
 
 impl Distance for Point2<f32> {
@@ -322,9 +339,12 @@ macro_rules! check_game_finish {
                 if !is_alive {
                     let (x, y) = (t.x(), t.y());
                     for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
-                        $self
-                            .particles
-                            .push(Particle::new($ctx, 2.0, [x, y], 5.0, dir));
+                        $self.particles.push(Particle::new(
+                            $ctx,
+                            2.0,
+                            [x, y],
+                            dir.map(|x| x * 5.0),
+                        ));
                     }
                 }
                 is_alive
@@ -349,11 +369,11 @@ macro_rules! bullet_hit {
 }
 
 macro_rules! bullets_hit {
-    ($shooter:expr, $targets:expr, $hitbox:literal) => {
+    ($shooter:expr, $targets:expr, $hitbox:literal, $ylimit: expr) => {
         $shooter.spell.for_each_visible_mut(|bullet| {
             bullet.update();
             bullet_hit!($targets, bullet, $hitbox);
-            if bullet.body.y() < 0.0 {
+            if bullet.body.y() < 0.0 || bullet.body.y() > $ylimit {
                 bullet.is_visible = false;
             }
         });
@@ -364,7 +384,7 @@ impl State {
     fn new(ctx: &Context) -> Self {
         let script_text = std::fs::read_to_string("script.th").unwrap();
         let values = parser::parse(tokenizer::tokenize(&script_text));
-        let bullet = |speed: f32, direction: (f32, f32)| Bullet::new(ctx, speed, direction);
+        let bullet = |velocity: [f32; 2]| Bullet::new(ctx, velocity.into());
 
         let mut players = vec![];
         if let Some(_) = values.get("sakuya") {
@@ -380,7 +400,7 @@ impl State {
             players.push(Player::new(
                 ctx,
                 sakuya.health,
-                bullet(sakuya.bullet.speed, DIR_UP),
+                bullet(DIR_UP.map(|x| x * sakuya.bullet.speed)),
                 sakuya.bullet.amount,
             ));
         }
@@ -401,7 +421,7 @@ impl State {
                 ctx,
                 reimu.health,
                 reimu.speed,
-                bullet(reimu.bullet.speed, DIR_DOWN),
+                bullet(DIR_DOWN.map(|x| x * reimu.bullet.speed)),
                 reimu.bullet.amount,
             ));
         }
@@ -415,13 +435,9 @@ impl State {
 
         let (win_w, win_h) = ctx.gfx.size();
 
-        let story_line = |text: &str, sprite: Sprite, pos: [f32; 2], time: u32| -> StoryLine {
-            (
-                centered_text(text),
-                sprite,
-                pos.into(),
-                std::time::Duration::from_secs(time.into()),
-            )
+        let screen = Screen {
+            width: win_w,
+            height: win_h,
         };
 
         let player_spr = Sprite {
@@ -434,15 +450,15 @@ impl State {
             color: Color::BLACK,
         };
 
-        let mut story_lines = vec![
-            story_line("The story begins...", player_spr, [0., 0.], 0),
-            story_line("I'm going to kill you!", enemy_spr, [-win_w * 0.7, 0.], 2),
+        let story = vec![
+            StoryLine::new("I'm going to kill you!", enemy_spr, [-win_w * 0.7, 0.]),
+            StoryLine::new("The story begins...", player_spr, [0., 0.]),
         ];
-        story_lines.reverse();
 
         Self {
             gamestate: GameState::Cinematic,
-            story: Story { lines: story_lines },
+            screen,
+            story,
 
             pause_menu: vec![
                 UISelectable {
@@ -451,7 +467,7 @@ impl State {
                     color: Color::WHITE,
                     select_color: Color::YELLOW,
                     action: |_, state| {
-                        state.gamestate = if state.story.lines.is_empty() {
+                        state.gamestate = if state.story.is_empty() {
                             GameState::Combat
                         } else {
                             GameState::Cinematic
@@ -474,9 +490,6 @@ impl State {
                 },
             ]
             .into(),
-
-            win_w,
-            win_h,
 
             players,
             enemies,
@@ -511,18 +524,18 @@ impl State {
 
                 self.players
                     .iter_mut()
-                    .for_each(|player| player.move_by(dir));
+                    .for_each(|player| player.move_by(dir.map(|x| x * player.speed()).into()));
             }
         }
 
         self.enemies.iter_mut().for_each(|enemy| {
             enemy.move_auto(&ctx);
-            bullets_hit!(enemy, self.players, 25.);
+            bullets_hit!(enemy, self.players, 25., self.screen.height);
             enemy.spell.spawn(&ctx, &enemy.body.position());
         });
 
         self.players.iter_mut().for_each(|player| {
-            bullets_hit!(player, self.enemies, 100.);
+            bullets_hit!(player, self.enemies, 100., self.screen.height);
             player.spell.spawn(&ctx, &player.body.position());
         });
 
@@ -563,10 +576,10 @@ const PLAYER_IMG_PATH: &str = "/sakuya.png";
 const ENEMY_IMG_PATH: &str = "/sakuya.png";
 const BULLET_IMG_PATH: &str = "/isaac.png";
 
-const DIR_UP: (f32, f32) = (0.0, -1.0);
-const DIR_DOWN: (f32, f32) = (0.0, 1.0);
-const DIR_LEFT: (f32, f32) = (-1.0, 0.0);
-const DIR_RIGHT: (f32, f32) = (1.0, 0.0);
+const DIR_UP: [f32; 2] = [0.0, -1.0];
+const DIR_DOWN: [f32; 2] = [0.0, 1.0];
+const DIR_LEFT: [f32; 2] = [-1.0, 0.0];
+const DIR_RIGHT: [f32; 2] = [1.0, 0.0];
 
 fn centered_text(text: &str) -> Text {
     Text::new(TextFragment {
@@ -604,8 +617,8 @@ macro_rules! draw_at {
 
 impl ggez::event::EventHandler<GameError> for State {
     fn resize_event(&mut self, _ctx: &mut Context, w: f32, h: f32) -> Result<(), GameError> {
-        self.win_w = w;
-        self.win_h = h;
+        self.screen.width = w;
+        self.screen.height = h;
         Ok(())
     }
 
@@ -618,8 +631,7 @@ impl ggez::event::EventHandler<GameError> for State {
         match input.keycode {
             Some(KeyCode::Return) | Some(KeyCode::Space) if !_repeated => match self.gamestate {
                 GameState::Cinematic => {
-                    self.story.lines.pop();
-                    if self.story.lines.is_empty() {
+                    if self.story.pop().is_none() || self.story.is_empty() {
                         self.gamestate = GameState::Combat;
                     }
                 }
@@ -665,11 +677,17 @@ impl ggez::event::EventHandler<GameError> for State {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = Canvas::from_frame(ctx, Color::from_rgb(0x2b, 0x2c, 0x2f));
 
+        let width = self.screen.width;
+        let height = self.screen.height;
+
+        let half_width = width * 0.5;
+        let half_height = height * 0.5;
+
         if let Some(background) = &self.background {
             let (w, h) = (background.width() as f32, background.height() as f32);
             canvas.draw(
                 background,
-                DrawParam::default().scale([self.win_w / w, self.win_h / h]),
+                DrawParam::default().scale([width / w, height / h]),
             );
         }
 
@@ -679,18 +697,6 @@ impl ggez::event::EventHandler<GameError> for State {
             player.spell.for_each_visible(|bullet| {
                 self.draw_body(&mut canvas, &bullet.body, 0.05, Color::CYAN);
             });
-
-            let circle = Mesh::new_circle(
-                ctx,
-                DrawMode::fill(),
-                *player.body.position(),
-                10.,
-                0.1,
-                Color::from_rgba(255, 0, 0, 127),
-            )
-            .unwrap();
-
-            draw_at!(canvas, &circle, (0.0, 0.0))
         });
 
         self.enemies.iter().for_each(|enemy| {
@@ -716,16 +722,21 @@ impl ggez::event::EventHandler<GameError> for State {
 
         self.texts
             .iter()
-            .for_each(|text| draw_at!(canvas, text, (self.win_w * 0.5, self.win_h * 0.5)));
+            .for_each(|text| draw_at!(canvas, text, (half_width, half_height)));
 
-        if let Some((text, Sprite { image, color }, _, _)) = self.story.lines.last() {
-            draw_at!(canvas, text, (self.win_w * 0.5, self.win_h * 0.5));
-            draw_at!(canvas, image, (self.win_w * 0.5, self.win_h * 0.5), *color);
+        if let Some(line) = self.story.last() {
+            draw_at!(canvas, &line.text, (half_width, half_height));
+            draw_at!(
+                canvas,
+                &line.sprite.image,
+                (width * 0.5 + line.pos.x, height * 0.5 + line.pos.y),
+                line.sprite.color
+            );
         }
 
         // TODO: limited pauses, with breaking effect after unpausing
         if self.gamestate == GameState::Paused {
-            let background = rect!(ctx, self.win_w, self.win_h, (0, 0, 0, 127));
+            let background = rect!(ctx, width, height, (0, 0, 0, 127));
             draw_at!(canvas, &background, (0.0, 0.0));
 
             if let Some(elem) = self.pause_menu.front() {
@@ -733,7 +744,7 @@ impl ggez::event::EventHandler<GameError> for State {
                 draw_at!(
                     canvas,
                     &elem.img,
-                    (self.win_w * 0.5 + x, self.win_h * 0.5 + y),
+                    (half_width + x, half_height + y),
                     elem.select_color
                 );
             }
@@ -743,7 +754,7 @@ impl ggez::event::EventHandler<GameError> for State {
                 draw_at!(
                     canvas,
                     &elem.img,
-                    (self.win_w * 0.5 + x, self.win_h * 0.5 + y),
+                    (half_width + x, half_height + y),
                     elem.color
                 );
             });
