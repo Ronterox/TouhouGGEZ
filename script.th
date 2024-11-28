@@ -1,7 +1,13 @@
-the amount of sbull is 8, and the speed of sbull is 20.
-the amount of rbull is 10, and the speed of rbull is 2.
+reimu's health is 200, and sakuya's health is 1.
 
-sakuya's bullet is sbull, also reimu's bullet is rbull.
+the speed of reimu is 5, and the speed of sakuya is 3.
+
+the enemy_spell's speed is 2. and the enemy_spell's amount is 5.
+
+the player_spell's speed is 8. and the player_spell's amount is 8.
+
+the player's data is sakuya, and the enemy's data is reimu.
+the player's bullet is player_spell, and the enemy's bullet is enemy_spell.
 
 the background is "grass.jpeg".
 
