@@ -6,6 +6,7 @@ use touhoulang::*;
 use touhoulang_macro::Evaluate;
 
 type Story = Vec<StoryLine>;
+type UIMenu = VecDeque<UISelectable<Text>>;
 
 // ------------------------------------------
 // Entities
@@ -98,7 +99,7 @@ struct Screen {
 }
 
 struct State {
-    pause_menu: VecDeque<UISelectable<Text>>,
+    uis: VecDeque<UIMenu>,
 
     gamestate: GameState,
     story: Story,
@@ -346,6 +347,61 @@ macro_rules! story {
     }}
 }
 
+macro_rules! rect {
+    ($ctx:ident, $w:expr, $h:expr, ($r:literal, $g:literal, $b:literal, $a:literal)) => {
+        Mesh::new_rectangle(
+            $ctx,
+            DrawMode::fill(),
+            Rect::new(0.0, 0.0, $w, $h),
+            Color::from_rgba($r, $g, $b, $a),
+        )
+        .unwrap()
+    };
+}
+
+macro_rules! draw_at {
+    ($canvas:ident, $ref:expr, ($x:expr, $y:expr)) => {
+        $canvas.draw($ref, DrawParam::default().dest([$x, $y]))
+    };
+    ($canvas:ident, $ref:expr, ($x:expr, $y:expr), $color: expr) => {
+        $canvas.draw($ref, DrawParam::default().dest([$x, $y]).color($color))
+    };
+}
+
+fn pause_menu() -> UIMenu {
+    [
+        UISelectable {
+            img: centered_text("Resume"),
+            pos: Point2 { x: 0., y: -100. },
+            color: Color::WHITE,
+            select_color: Color::YELLOW,
+            action: |_, state| {
+                state.uis.remove(0);
+                state.gamestate = if state.story.is_empty() {
+                    GameState::Combat
+                } else {
+                    GameState::Cinematic
+                };
+            },
+        },
+        UISelectable {
+            img: centered_text("Reset"),
+            pos: Point2 { x: 0., y: 0. },
+            color: Color::WHITE,
+            select_color: Color::YELLOW,
+            action: |ctx, state| state.restart(ctx),
+        },
+        UISelectable {
+            img: centered_text("Quit"),
+            pos: Point2 { x: 0., y: 100. },
+            color: Color::WHITE,
+            select_color: Color::RED,
+            action: |ctx, _| ctx.request_quit(),
+        },
+    ]
+    .into()
+}
+
 impl State {
     fn new(ctx: &Context) -> Self {
         let script_text = std::fs::read_to_string("script.th").unwrap();
@@ -392,37 +448,7 @@ impl State {
             screen,
             story,
 
-            pause_menu: vec![
-                UISelectable {
-                    img: centered_text("Resume"),
-                    pos: Point2 { x: 0., y: -100. },
-                    color: Color::WHITE,
-                    select_color: Color::YELLOW,
-                    action: |_, state| {
-                        state.gamestate = if state.story.is_empty() {
-                            GameState::Combat
-                        } else {
-                            GameState::Cinematic
-                        };
-                    },
-                },
-                UISelectable {
-                    img: centered_text("Reset"),
-                    pos: Point2 { x: 0., y: 0. },
-                    color: Color::WHITE,
-                    select_color: Color::YELLOW,
-                    action: |ctx, state| state.restart(ctx),
-                },
-                UISelectable {
-                    img: centered_text("Quit"),
-                    pos: Point2 { x: 0., y: 100. },
-                    color: Color::WHITE,
-                    select_color: Color::RED,
-                    action: |ctx, _| ctx.request_quit(),
-                },
-            ]
-            .into(),
-
+            uis: VecDeque::new(),
             player,
             enemy,
             background,
@@ -556,27 +582,6 @@ fn centered_text(text: &str) -> Text {
     .to_owned()
 }
 
-macro_rules! rect {
-    ($ctx:ident, $w:expr, $h:expr, ($r:literal, $g:literal, $b:literal, $a:literal)) => {
-        Mesh::new_rectangle(
-            $ctx,
-            DrawMode::fill(),
-            Rect::new(0.0, 0.0, $w, $h),
-            Color::from_rgba($r, $g, $b, $a),
-        )
-        .unwrap()
-    };
-}
-
-macro_rules! draw_at {
-    ($canvas:ident, $ref:expr, ($x:expr, $y:expr)) => {
-        $canvas.draw($ref, DrawParam::default().dest([$x, $y]))
-    };
-    ($canvas:ident, $ref:expr, ($x:expr, $y:expr), $color: expr) => {
-        $canvas.draw($ref, DrawParam::default().dest([$x, $y]).color($color))
-    };
-}
-
 impl ggez::event::EventHandler<GameError> for State {
     fn resize_event(&mut self, _ctx: &mut Context, w: f32, h: f32) -> Result<(), GameError> {
         self.screen.width = w;
@@ -598,27 +603,28 @@ impl ggez::event::EventHandler<GameError> for State {
                     }
                 }
                 GameState::Paused => {
-                    if let Some(elem) = self.pause_menu.front() {
+                    if let Some(elem) = self.uis[0].front() {
                         (elem.action)(ctx, self);
                     }
                 }
                 _ => {}
             },
-            Some(KeyCode::Escape) if !_repeated => {
+            Some(KeyCode::Escape) if !_repeated && self.gamestate != GameState::Paused => {
                 self.gamestate = GameState::Paused;
+                self.uis.push_front(pause_menu());
             }
             Some(KeyCode::R) if !_repeated => {
                 self.restart(ctx);
             }
             Some(key) if self.gamestate == GameState::Paused => match key {
                 KeyCode::Down | KeyCode::Right | KeyCode::S | KeyCode::D => {
-                    if let Some(elem) = self.pause_menu.pop_front() {
-                        self.pause_menu.push_back(elem);
+                    if let Some(elem) = self.uis[0].pop_front() {
+                        self.uis[0].push_back(elem);
                     }
                 }
                 KeyCode::Up | KeyCode::Left | KeyCode::W | KeyCode::A => {
-                    if let Some(elem) = self.pause_menu.pop_back() {
-                        self.pause_menu.push_front(elem);
+                    if let Some(elem) = self.uis[0].pop_back() {
+                        self.uis[0].push_front(elem);
                     }
                 }
                 _ => {}
@@ -703,24 +709,26 @@ impl ggez::event::EventHandler<GameError> for State {
             let background = rect!(ctx, width, height, (0, 0, 0, 127));
             draw_at!(canvas, &background, (0.0, 0.0));
 
-            if let Some(elem) = self.pause_menu.front() {
-                let Point2 { x, y } = elem.pos;
-                draw_at!(
-                    canvas,
-                    &elem.img,
-                    (half_width + x, half_height + y),
-                    elem.select_color
-                );
-            }
+            self.uis.iter().for_each(|ui| {
+                if let Some(elem) = ui.front() {
+                    let Point2 { x, y } = elem.pos;
+                    draw_at!(
+                        canvas,
+                        &elem.img,
+                        (half_width + x, half_height + y),
+                        elem.select_color
+                    );
+                }
 
-            self.pause_menu.iter().skip(1).for_each(|elem| {
-                let Point2 { x, y } = elem.pos;
-                draw_at!(
-                    canvas,
-                    &elem.img,
-                    (half_width + x, half_height + y),
-                    elem.color
-                );
+                ui.iter().skip(1).for_each(|elem| {
+                    let Point2 { x, y } = elem.pos;
+                    draw_at!(
+                        canvas,
+                        &elem.img,
+                        (half_width + x, half_height + y),
+                        elem.color
+                    );
+                });
             });
         }
 
