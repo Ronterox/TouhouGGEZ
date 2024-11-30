@@ -338,12 +338,20 @@ impl Distance for Point2<f32> {
     }
 }
 
+macro_rules! story {
+    ($($spr:ident: $text:literal, $pos:tt,)*) => {{
+        let mut story = vec![$(StoryLine::new($text, $spr, $pos)),*];
+        story.reverse();
+        story
+    }}
+}
+
 impl State {
     fn new(ctx: &Context) -> Self {
         let script_text = std::fs::read_to_string("script.th").unwrap();
         let init = Globals::from_str(&script_text);
 
-        let p_sprite = Sprite {
+        let p_spr = Sprite {
             image: load_image(ctx, PLAYER_IMG_PATH),
             color: Color::WHITE,
         };
@@ -355,7 +363,7 @@ impl State {
             init.player.bullet.amount,
         );
 
-        let e_sprite = Sprite {
+        let e_spr = Sprite {
             image: load_image(ctx, ENEMY_IMG_PATH),
             color: Color::BLACK,
         };
@@ -373,10 +381,10 @@ impl State {
 
         let background = load_image(ctx, format!("/{}/", init.background).as_str());
 
-        let story = vec![
-            StoryLine::new("I'm going to kill you!", e_sprite, [-width * 0.7, 0.]),
-            StoryLine::new("The story begins...", p_sprite, [0., 0.]),
-        ];
+        let story = story! {
+            p_spr: "The story begins...", [0., 0.],
+            e_spr: "I'm going to kill you!", [-width * 0.7, 0.],
+        };
 
         Self {
             gamestate: GameState::Cinematic,
