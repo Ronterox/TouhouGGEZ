@@ -107,8 +107,8 @@ struct State {
     screen: Screen,
     background: Image,
 
-    player: Player,
-    enemy: Enemy,
+    player: Option<Player>,
+    enemy: Option<Enemy>,
 
     texts: Vec<Text>,
     particles: Vec<Particle>,
@@ -153,8 +153,8 @@ impl InitObject {
 }
 
 impl Particle {
-    fn new(ctx: &Context, ttl: f32, position: [f32; 2], direction: [f32; 2], speed: f32) -> Self {
-        let mut bullet = Bullet::new(ctx, direction, speed);
+    fn new(sprite: &Sprite, ttl: f32, position: [f32; 2], direction: [f32; 2], speed: f32) -> Self {
+        let mut bullet = Bullet::new(sprite, direction, speed);
         bullet.body.position = Point2::from(position);
         bullet.is_visible = true;
 
@@ -238,29 +238,20 @@ impl Timer {
 }
 
 impl Body {
-    fn new(
-        direction: [f32; 2],
-        speed: f32,
-        position: [f32; 2],
-        ctx: &Context,
-        image_path: &str,
-    ) -> Self {
+    fn new(sprite: &Sprite, position: [f32; 2], direction: [f32; 2], speed: f32) -> Self {
         Self {
             position: Point2::from(position),
             direction: Point2::from(direction),
             speed,
-            sprite: Sprite {
-                image: load_image(ctx, image_path),
-                color: Color::WHITE,
-            },
+            sprite: sprite.clone(),
         }
     }
 }
 
 impl Bullet {
-    fn new(ctx: &Context, direction: [f32; 2], speed: f32) -> Self {
+    fn new(sprite: &Sprite, direction: [f32; 2], speed: f32) -> Self {
         Self {
-            body: Body::new(direction, speed, [0.0, 0.0], ctx, BULLET_IMG_PATH),
+            body: Body::new(&sprite, [0.0, 0.0], direction, speed),
             is_visible: false,
         }
     }
@@ -279,25 +270,27 @@ impl Bullet {
 }
 
 impl Player {
-    fn new(ctx: &Context, health: u32, bullet: Bullet, bullets_size: usize) -> Self {
+    fn new(sprite: &Sprite, health: u32, bullet: Bullet, bullets_size: usize) -> Self {
         Self {
             health: Health {
                 health,
                 max_health: health,
                 on_hit: None,
             },
-            body: Body::new([0.0, 0.0], 5.0, [350.0, 350.0], ctx, PLAYER_IMG_PATH),
+            body: Body::new(sprite, [350.0, 350.0], [0.0, 0.0], 5.0),
             spell: Spell::new(bullet, bullets_size, 0.1),
         }
     }
 
-    fn update(&mut self, ctx: &Context, enemy: &mut Enemy) {
+    fn update(&mut self, ctx: &Context, enemy: &mut Option<Enemy>) {
         self.spell.for_each_visible_mut(|bullet| {
             bullet.update();
 
-            if bullet.collided(&enemy.body.position, 100.) {
-                enemy.health.take_damage(1);
-                bullet.is_visible = false;
+            if let Some(enemy) = enemy {
+                if bullet.collided(&enemy.body.position, 100.) {
+                    enemy.health.take_damage(1);
+                    bullet.is_visible = false;
+                }
             }
 
             if bullet.body.position.x < 0.0 || bullet.body.position.y < 0.0 {
@@ -309,28 +302,30 @@ impl Player {
 }
 
 impl Enemy {
-    fn new(ctx: &Context, health: u32, speed: f32, bullet: Bullet, bullets_size: usize) -> Self {
+    fn new(sprite: &Sprite, health: u32, speed: f32, bullet: Bullet, bullets_size: usize) -> Self {
         Self {
             health: Health {
                 health,
                 max_health: health,
                 on_hit: Some(|hp| println!("Enemy Health: {hp}")),
             },
-            body: Body::new([1.0, 0.0], speed, [350.0, 100.0], ctx, ENEMY_IMG_PATH),
+            body: Body::new(sprite, [350.0, 100.0], [1.0, 0.0], speed),
             spell: Spell::new(bullet, bullets_size, 0.5),
             directions: vec![-1., 0., 1., 0., 1., 0., -1., 0.],
             move_timer: Timer::new(1.5),
         }
     }
 
-    fn update(&mut self, ctx: &Context, player: &mut Player, screen: &Screen) {
+    fn update(&mut self, ctx: &Context, player: &mut Option<Player>, screen: &Screen) {
         self.move_auto(&ctx);
         self.spell.for_each_visible_mut(|bullet| {
             bullet.update();
 
-            if bullet.collided(&player.body.position, 25.) {
-                player.health.take_damage(1);
-                bullet.is_visible = false;
+            if let Some(player) = player {
+                if bullet.collided(&player.body.position, 25.) {
+                    player.health.take_damage(1);
+                    bullet.is_visible = false;
+                }
             }
 
             if bullet.body.position.x < 0.0 || bullet.body.position.y > screen.height {
@@ -451,15 +446,20 @@ impl State {
         let script_text = std::fs::read_to_string("script.th").unwrap();
         let init = Globals::from_str(&script_text);
 
+        let b_spr = Sprite {
+            image: load_image(ctx, BULLET_IMG_PATH),
+            color: Color::WHITE,
+        };
+
         let p_spr = Sprite {
             image: load_image(ctx, PLAYER_IMG_PATH),
             color: Color::WHITE,
         };
 
         let player = Player::new(
-            ctx,
+            &p_spr,
             init.player.health(),
-            Bullet::new(ctx, DIR_UP, init.player.bullet.speed),
+            Bullet::new(&b_spr, DIR_UP, init.player.bullet.speed),
             init.player.bullet.amount,
         );
 
@@ -469,10 +469,10 @@ impl State {
         };
 
         let enemy = Enemy::new(
-            ctx,
+            &p_spr,
             init.enemy.health(),
             init.enemy.speed(),
-            Bullet::new(ctx, DIR_DOWN, init.enemy.bullet.speed),
+            Bullet::new(&b_spr, DIR_DOWN, init.enemy.bullet.speed),
             init.enemy.bullet.amount,
         );
 
@@ -493,8 +493,8 @@ impl State {
             story,
 
             uis: VecDeque::new(),
-            player,
-            enemy,
+            player: Some(player),
+            enemy: Some(enemy),
             background,
 
             particles: vec![],
@@ -524,46 +524,49 @@ impl State {
                     _ => return Ok(()),
                 };
 
-                let speed = self.player.body.speed;
-                self.player.body.position.x += dir[0] * speed;
-                self.player.body.position.y += dir[1] * speed;
+                if let Some(Player { ref mut body, .. }) = self.player {
+                    body.position.x += dir[0] * body.speed;
+                    body.position.y += dir[1] * body.speed;
+                }
             }
         }
 
-        let mut enemy_death = !self.enemy.health.is_alive();
-        let mut player_death = !self.player.health.is_alive();
+        if let Some(ref mut player) = self.player {
+            player.update(&ctx, &mut self.enemy);
 
-        if !player_death {
-            self.player.update(&ctx, &mut self.enemy);
-        }
+            if !player.health.is_alive() {
+                let Point2 { x, y } = player.body.position;
+                let sprite = &player.spell.bullets.first().unwrap().body.sprite;
 
-        if !enemy_death {
-            self.enemy.update(&ctx, &mut self.player, &self.screen);
-        }
+                for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
+                    self.particles
+                        .push(Particle::new(sprite, 2.0, [x, y], dir, 5.0));
+                }
 
-        enemy_death = !self.enemy.health.is_alive() != enemy_death;
-        player_death = !self.player.health.is_alive() != player_death;
+                self.texts
+                    .push(centered_text("You died! Press R to restart."));
 
-        if player_death {
-            let Point2 { x, y } = self.player.body.position;
-            for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
-                self.particles
-                    .push(Particle::new(ctx, 2.0, [x, y], dir, 5.0));
+                self.player = None;
             }
-
-            self.texts
-                .push(centered_text("You died! Press R to restart."));
         }
 
-        if enemy_death {
-            let Point2 { x, y } = self.enemy.body.position;
-            for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
-                self.particles
-                    .push(Particle::new(ctx, 2.0, [x, y], dir, 5.0));
-            }
+        if let Some(ref mut enemy) = self.enemy {
+            enemy.update(&ctx, &mut self.player, &self.screen);
 
-            self.texts
-                .push(centered_text("You win! Press R to restart."));
+            if !enemy.health.is_alive() {
+                let Point2 { x, y } = enemy.body.position;
+                let sprite = &enemy.spell.bullets.first().unwrap().body.sprite;
+
+                for dir in [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT] {
+                    self.particles
+                        .push(Particle::new(sprite, 2.0, [x, y], dir, 5.0));
+                }
+
+                self.texts
+                    .push(centered_text("You win! Press R to restart."));
+
+                self.enemy = None;
+            }
         }
 
         self.particles.retain_mut(|particle| {
@@ -668,15 +671,15 @@ impl ggez::event::EventHandler<GameError> for State {
             DrawParam::default().scale([width / w, height / h]),
         );
 
-        if self.enemy.health.is_alive() {
-            self.draw_body(&mut canvas, &self.enemy.body, 0.2, Color::BLACK);
-            self.enemy.spell.for_each_visible(|bullet| {
+        if let Some(ref enemy) = self.enemy {
+            self.draw_body(&mut canvas, &enemy.body, 0.2, Color::BLACK);
+            enemy.spell.for_each_visible(|bullet| {
                 self.draw_body(&mut canvas, &bullet.body, 0.05, Color::RED);
             });
 
             let healthbar = rect!(
                 ctx,
-                self.enemy.health.percentage() * 100.,
+                enemy.health.percentage() * 100.,
                 10.0,
                 (255, 0, 0, 127)
             );
@@ -684,16 +687,13 @@ impl ggez::event::EventHandler<GameError> for State {
             draw_at!(
                 canvas,
                 &healthbar,
-                (
-                    self.enemy.body.position.x - 50.0,
-                    self.enemy.body.position.y - 90.0
-                )
+                (enemy.body.position.x - 50.0, enemy.body.position.y - 90.0)
             );
         }
 
-        if self.player.health.is_alive() {
-            self.draw_body(&mut canvas, &self.player.body, 0.12, Color::WHITE);
-            self.player.spell.for_each_visible(|bullet| {
+        if let Some(ref player) = self.player {
+            self.draw_body(&mut canvas, &player.body, 0.12, Color::WHITE);
+            player.spell.for_each_visible(|bullet| {
                 self.draw_body(&mut canvas, &bullet.body, 0.05, Color::CYAN);
             });
         }
