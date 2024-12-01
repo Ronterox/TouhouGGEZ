@@ -266,13 +266,11 @@ impl Bullet {
     }
 
     fn update(&mut self) {
-        let Point2 { x, y } = self.body.position;
-        let spd = self.body.speed;
+        let Point2 { x: dx, y: dy } = self.body.direction;
+        let speed = self.body.speed;
 
-        self.body.position = Point2 {
-            x: x + spd * self.body.direction.x,
-            y: y + spd * self.body.direction.y,
-        }
+        self.body.position.x += dx * speed;
+        self.body.position.y += dy * speed;
     }
 
     fn collided(&self, _other: &Point2<f32>, hitbox_size: f32) -> bool {
@@ -292,6 +290,22 @@ impl Player {
             spell: Spell::new(bullet, bullets_size, 0.1),
         }
     }
+
+    fn update(&mut self, ctx: &Context, enemy: &mut Enemy) {
+        self.spell.for_each_visible_mut(|bullet| {
+            bullet.update();
+
+            if bullet.collided(&enemy.body.position, 100.) {
+                enemy.health.take_damage(1);
+                bullet.is_visible = false;
+            }
+
+            if bullet.body.position.x < 0.0 || bullet.body.position.y < 0.0 {
+                bullet.is_visible = false;
+            }
+        });
+        self.spell.spawn(&ctx, &self.body.position);
+    }
 }
 
 impl Enemy {
@@ -307,6 +321,23 @@ impl Enemy {
             directions: vec![-1., 0., 1., 0., 1., 0., -1., 0.],
             move_timer: Timer::new(1.5),
         }
+    }
+
+    fn update(&mut self, ctx: &Context, player: &mut Player, screen: &Screen) {
+        self.move_auto(&ctx);
+        self.spell.for_each_visible_mut(|bullet| {
+            bullet.update();
+
+            if bullet.collided(&player.body.position, 25.) {
+                player.health.take_damage(1);
+                bullet.is_visible = false;
+            }
+
+            if bullet.body.position.x < 0.0 || bullet.body.position.y > screen.height {
+                bullet.is_visible = false;
+            }
+        });
+        self.spell.spawn(&ctx, &self.body.position);
     }
 
     fn move_auto(&mut self, ctx: &Context) {
@@ -366,6 +397,19 @@ macro_rules! draw_at {
     ($canvas:ident, $ref:expr, ($x:expr, $y:expr), $color: expr) => {
         $canvas.draw($ref, DrawParam::default().dest([$x, $y]).color($color))
     };
+}
+
+fn centered_text(text: &str) -> Text {
+    Text::new(TextFragment {
+        text: text.to_owned(),
+        scale: Some(PxScale::from(40.0)),
+        ..Default::default()
+    })
+    .set_layout(TextLayout {
+        h_align: TextAlign::Middle,
+        v_align: TextAlign::Middle,
+    })
+    .to_owned()
 }
 
 fn pause_menu() -> UIMenu {
@@ -480,49 +524,25 @@ impl State {
                     _ => return Ok(()),
                 };
 
-                let Point2 { x, y } = self.player.body.position;
-                let spd = self.player.body.speed;
-
-                self.player.body.position = Point2 {
-                    x: dir[0] * spd + x,
-                    y: dir[1] * spd + y,
-                };
+                let speed = self.player.body.speed;
+                self.player.body.position.x += dir[0] * speed;
+                self.player.body.position.y += dir[1] * speed;
             }
         }
 
-        let mut enemy_death = false;
-        let mut player_death = false;
+        let mut enemy_death = !self.enemy.health.is_alive();
+        let mut player_death = !self.player.health.is_alive();
 
-        self.enemy.move_auto(&ctx);
-        self.enemy.spell.for_each_visible_mut(|bullet| {
-            bullet.update();
+        if !player_death {
+            self.player.update(&ctx, &mut self.enemy);
+        }
 
-            if bullet.collided(&self.player.body.position, 25.) {
-                self.player.health.take_damage(1);
-                player_death = !self.player.health.is_alive();
-                bullet.is_visible = false;
-            }
+        if !enemy_death {
+            self.enemy.update(&ctx, &mut self.player, &self.screen);
+        }
 
-            if bullet.body.position.x < 0.0 || bullet.body.position.y > self.screen.height {
-                bullet.is_visible = false;
-            }
-        });
-        self.enemy.spell.spawn(&ctx, &self.enemy.body.position);
-
-        self.player.spell.for_each_visible_mut(|bullet| {
-            bullet.update();
-
-            if bullet.collided(&self.enemy.body.position, 100.) {
-                self.enemy.health.take_damage(1);
-                enemy_death = !self.enemy.health.is_alive();
-                bullet.is_visible = false;
-            }
-
-            if bullet.body.position.x < 0.0 || bullet.body.position.y < 0.0 {
-                bullet.is_visible = false;
-            }
-        });
-        self.player.spell.spawn(&ctx, &self.player.body.position);
+        enemy_death = !self.enemy.health.is_alive() != enemy_death;
+        player_death = !self.player.health.is_alive() != player_death;
 
         if player_death {
             let Point2 { x, y } = self.player.body.position;
@@ -568,19 +588,6 @@ const DIR_UP: [f32; 2] = [0.0, -1.0];
 const DIR_DOWN: [f32; 2] = [0.0, 1.0];
 const DIR_LEFT: [f32; 2] = [-1.0, 0.0];
 const DIR_RIGHT: [f32; 2] = [1.0, 0.0];
-
-fn centered_text(text: &str) -> Text {
-    Text::new(TextFragment {
-        text: text.to_owned(),
-        scale: Some(PxScale::from(40.0)),
-        ..Default::default()
-    })
-    .set_layout(TextLayout {
-        h_align: TextAlign::Middle,
-        v_align: TextAlign::Middle,
-    })
-    .to_owned()
-}
 
 impl ggez::event::EventHandler<GameError> for State {
     fn resize_event(&mut self, _ctx: &mut Context, w: f32, h: f32) -> Result<(), GameError> {
@@ -655,36 +662,41 @@ impl ggez::event::EventHandler<GameError> for State {
             self.background.width() as f32,
             self.background.height() as f32,
         );
+
         canvas.draw(
             &self.background,
             DrawParam::default().scale([width / w, height / h]),
         );
 
-        self.draw_body(&mut canvas, &self.enemy.body, 0.2, Color::BLACK);
-        self.enemy.spell.for_each_visible(|bullet| {
-            self.draw_body(&mut canvas, &bullet.body, 0.05, Color::RED);
-        });
+        if self.enemy.health.is_alive() {
+            self.draw_body(&mut canvas, &self.enemy.body, 0.2, Color::BLACK);
+            self.enemy.spell.for_each_visible(|bullet| {
+                self.draw_body(&mut canvas, &bullet.body, 0.05, Color::RED);
+            });
 
-        self.draw_body(&mut canvas, &self.player.body, 0.12, Color::WHITE);
-        self.player.spell.for_each_visible(|bullet| {
-            self.draw_body(&mut canvas, &bullet.body, 0.05, Color::CYAN);
-        });
+            let healthbar = rect!(
+                ctx,
+                self.enemy.health.percentage() * 100.,
+                10.0,
+                (255, 0, 0, 127)
+            );
 
-        let healthbar = rect!(
-            ctx,
-            self.enemy.health.percentage() * 100.,
-            10.0,
-            (255, 0, 0, 127)
-        );
+            draw_at!(
+                canvas,
+                &healthbar,
+                (
+                    self.enemy.body.position.x - 50.0,
+                    self.enemy.body.position.y - 90.0
+                )
+            );
+        }
 
-        draw_at!(
-            canvas,
-            &healthbar,
-            (
-                self.enemy.body.position.x - 50.0,
-                self.enemy.body.position.y - 90.0
-            )
-        );
+        if self.player.health.is_alive() {
+            self.draw_body(&mut canvas, &self.player.body, 0.12, Color::WHITE);
+            self.player.spell.for_each_visible(|bullet| {
+                self.draw_body(&mut canvas, &bullet.body, 0.05, Color::CYAN);
+            });
+        }
 
         self.particles.iter().for_each(|particle| {
             self.draw_body(&mut canvas, &particle.bullet.body, 0.05, Color::MAGENTA);
@@ -708,29 +720,29 @@ impl ggez::event::EventHandler<GameError> for State {
         if self.gamestate == GameState::Paused {
             let background = rect!(ctx, width, height, (0, 0, 0, 127));
             draw_at!(canvas, &background, (0.0, 0.0));
-
-            self.uis.iter().for_each(|ui| {
-                if let Some(elem) = ui.front() {
-                    let Point2 { x, y } = elem.pos;
-                    draw_at!(
-                        canvas,
-                        &elem.img,
-                        (half_width + x, half_height + y),
-                        elem.select_color
-                    );
-                }
-
-                ui.iter().skip(1).for_each(|elem| {
-                    let Point2 { x, y } = elem.pos;
-                    draw_at!(
-                        canvas,
-                        &elem.img,
-                        (half_width + x, half_height + y),
-                        elem.color
-                    );
-                });
-            });
         }
+
+        self.uis.iter().for_each(|ui| {
+            if let Some(elem) = ui.front() {
+                let Point2 { x, y } = elem.pos;
+                draw_at!(
+                    canvas,
+                    &elem.img,
+                    (half_width + x, half_height + y),
+                    elem.select_color
+                );
+            }
+
+            ui.iter().skip(1).for_each(|elem| {
+                let Point2 { x, y } = elem.pos;
+                draw_at!(
+                    canvas,
+                    &elem.img,
+                    (half_width + x, half_height + y),
+                    elem.color
+                );
+            });
+        });
 
         canvas.finish(ctx)
     }
