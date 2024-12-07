@@ -83,6 +83,7 @@ struct StoryLine {
     text: Text,
     sprite: Sprite,
     pos: Point2<f32>,
+    color: Color,
 }
 
 struct UISelectable<T: Drawable> {
@@ -100,6 +101,7 @@ struct Screen {
 
 struct State {
     uis: VecDeque<UIMenu>,
+    last_update: std::time::SystemTime,
 
     gamestate: GameState,
     story: Story,
@@ -350,11 +352,12 @@ impl Enemy {
 }
 
 impl StoryLine {
-    fn new(text: &str, sprite: Sprite, pos: [f32; 2]) -> Self {
+    fn new(text: &str, sprite: Sprite, pos: [f32; 2], color: Color) -> Self {
         Self {
             text: centered_text(text),
             sprite,
             pos: pos.into(),
+            color,
         }
     }
 }
@@ -366,8 +369,13 @@ impl Distance for Point2<f32> {
 }
 
 macro_rules! story {
-    ($($spr:ident: $text:literal, $pos:tt,)*) => {{
-        let mut story = vec![$(StoryLine::new($text, $spr, $pos)),*];
+    ($($spr:ident: $text:expr, $pos:tt,)*) => {{
+        let mut story = vec![$(StoryLine::new($text, $spr, $pos, Color::WHITE)),*];
+        story.reverse();
+        story
+    }};
+    ($($spr:ident: $text:expr, $pos:tt, $color:expr,)*) => {{
+        let mut story = vec![$(StoryLine::new($text, $spr, $pos, $color)),*];
         story.reverse();
         story
     }}
@@ -441,10 +449,21 @@ fn pause_menu() -> UIMenu {
     .into()
 }
 
+fn get_script_mod_date() -> std::time::SystemTime {
+    let metadata = std::fs::metadata("script.th").unwrap();
+    metadata.modified().unwrap()
+}
+
 impl State {
     fn new(ctx: &Context) -> Self {
         let script_text = std::fs::read_to_string("script.th").unwrap();
-        let init = Globals::from_str(&script_text);
+        let init_panic = std::panic::catch_unwind(|| Globals::from_str(&script_text));
+
+        let init = if let Ok(ref init) = init_panic {
+            init
+        } else {
+            &Globals::default()
+        };
 
         let b_spr = Sprite {
             image: load_image(ctx, BULLET_IMG_PATH),
@@ -481,13 +500,21 @@ impl State {
 
         let background = load_image(ctx, format!("/{}/", init.background).as_str());
 
-        let story = story! {
-            p_spr: "The story begins...", [0., 0.],
-            e_spr: "I'm going to kill you!", [-width * 0.7, 0.],
+        let story = if let Err(e) = init_panic {
+            let msg = e.downcast_ref::<String>().unwrap();
+            story! {
+                p_spr: msg, [0., 0.], Color::BLACK,
+            }
+        } else {
+            story! {
+                p_spr: "The story begins...", [0., 0.],
+                e_spr: "I'm going to kill you!", [-width * 0.7, 0.],
+            }
         };
 
         Self {
             gamestate: GameState::Cinematic,
+            last_update: get_script_mod_date(),
 
             screen,
             story,
@@ -646,6 +673,12 @@ impl ggez::event::EventHandler<GameError> for State {
     }
 
     fn update(&mut self, ctx: &mut Context) -> GameResult {
+        let curr = get_script_mod_date();
+        if curr != self.last_update {
+            self.last_update = curr;
+            self.restart(ctx);
+        }
+
         match self.gamestate {
             GameState::Combat => self.on_combat_update(ctx),
             _ => Ok(()),
@@ -707,7 +740,7 @@ impl ggez::event::EventHandler<GameError> for State {
             .for_each(|text| draw_at!(canvas, text, (half_width, half_height)));
 
         if let Some(line) = self.story.last() {
-            draw_at!(canvas, &line.text, (half_width, half_height));
+            draw_at!(canvas, &line.text, (half_width, half_height), line.color);
             draw_at!(
                 canvas,
                 &line.sprite.image,
